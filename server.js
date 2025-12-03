@@ -15,7 +15,7 @@ const upload = multer({
 const API_KEY_GEMINI = process.env.GEMINI_API_KEY; 
 const SECRET_TOKEN = process.env.MY_SECRET_TOKEN;
 
-app.get('/', (req, res) => res.send('Usine OK (Stable V5 - Gemini Fix)'));
+app.get('/', (req, res) => res.send('Usine OK (V6 - Gemini 2.5 Flash)'));
 
 // Route principale de traitement
 app.post('/process', (req, res, next) => {
@@ -70,7 +70,8 @@ app.post('/process', (req, res, next) => {
             tasks.push((async () => {
                 try {
                     const genAI = new GoogleGenerativeAI(API_KEY_GEMINI);
-                    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+                    // 🆕 Modèle mis à jour (1.5 retiré par Google en 2024)
+                    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
                     
                     // 🆕 COMPRESSION DE L'IMAGE AVANT ENVOI À GEMINI
                     // Évite le "fetch failed" sur les grosses images
@@ -123,4 +124,4 @@ app.post('/process', (req, res, next) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🏭 Usine V5 démarrée sur le port ${PORT}`));
+app.listen(PORT, () => console.log(`🏭 Usine V6 (Gemini 2.5) démarrée sur le port ${PORT}`));
