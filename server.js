@@ -376,7 +376,8 @@ app.post('/process', (req, res, next) => {
 app.post('/seo', upload.fields([
     { name: 'image', maxCount: 1 },
     { name: 'customPrompt', maxCount: 1 },
-    { name: 'keywords', maxCount: 1 }
+    { name: 'keywords', maxCount: 1 },
+    { name: 'keywordsForced', maxCount: 1 }  // 🆕 V14.3 : Mots-clés obligatoires
 ]), async (req, res) => {
     console.log("\n📨 REQUÊTE SEO REÇUE !");
     
@@ -399,23 +400,21 @@ app.post('/seo', upload.fields([
         console.log(`📁 Image : ${imageFile.originalname}`);
         console.log(`   Poids : ${(imageFile.size / 1024).toFixed(1)} Ko`);
         
-        // 🆕 V14.3 : Récupérer le prompt personnalisé et les mots-clés
+        // Récupérer les paramètres
         const customPrompt = req.body?.customPrompt || '';
         const keywordsRaw = req.body?.keywords || '';
+        const keywordsForcedRaw = req.body?.keywordsForced || '';  // 🆕
         
         if (customPrompt) {
-            console.log(`   📝 Prompt personnalisé : ${customPrompt.substring(0, 50)}...`);
-        }
-        if (keywordsRaw) {
-            console.log(`   🏷️ Mots-clés fournis`);
+            console.log(`   📝 Prompt personnalisé`);
         }
         
-        // Traiter les mots-clés avec groupes
-        // Format : "vacances, [mer, océan, plage], montagne, [famille, couple]"
-        // Les crochets = groupe dont UN SEUL mot sera choisi aléatoirement
-        let processedKeywords = [];
-        if (keywordsRaw) {
-            const parts = keywordsRaw.split(/,(?![^\[]*\])/);  // Split par virgule sauf dans les crochets
+        // Fonction pour traiter les mots-clés (avec groupes)
+        function processKeywordString(raw, label) {
+            const result = [];
+            if (!raw) return result;
+            
+            const parts = raw.split(/,(?![^\[]*\])/);  // Split par virgule sauf dans les crochets
             
             for (let part of parts) {
                 part = part.trim();
@@ -425,13 +424,25 @@ app.post('/seo', upload.fields([
                     const options = groupContent.split(',').map(s => s.trim()).filter(Boolean);
                     if (options.length > 0) {
                         const chosen = options[Math.floor(Math.random() * options.length)];
-                        processedKeywords.push(chosen);
-                        console.log(`   🎲 Groupe [${options.join(', ')}] → "${chosen}"`);
+                        result.push(chosen);
+                        console.log(`   🎲 ${label} [${options.join(', ')}] → "${chosen}"`);
                     }
                 } else if (part) {
-                    processedKeywords.push(part);
+                    result.push(part);
                 }
             }
+            return result;
+        }
+        
+        // Traiter les deux types de mots-clés
+        const processedKeywords = processKeywordString(keywordsRaw, '🏷️');
+        const processedKeywordsForced = processKeywordString(keywordsForcedRaw, '🔒');
+        
+        if (processedKeywords.length > 0) {
+            console.log(`   🏷️ Conditionnels : ${processedKeywords.join(', ')}`);
+        }
+        if (processedKeywordsForced.length > 0) {
+            console.log(`   🔒 Obligatoires : ${processedKeywordsForced.join(', ')}`);
         }
         
         const genAI = new GoogleGenerativeAI(API_KEY_GEMINI);
@@ -454,9 +465,16 @@ app.post('/seo', upload.fields([
             promptParts.push(`\nCONTEXTE ET INSTRUCTIONS SPÉCIFIQUES :\n${customPrompt}`);
         }
         
+        // 🆕 Mots-clés OBLIGATOIRES (toujours intégrés)
+        if (processedKeywordsForced.length > 0) {
+            promptParts.push(`\nMOTS-CLÉS OBLIGATOIRES (à intégrer OBLIGATOIREMENT dans le texte) :\n${processedKeywordsForced.join(', ')}`);
+            promptParts.push("Ces mots-clés DOIVENT apparaître dans le titre, l'alt ou la description. Intègre-les naturellement.");
+        }
+        
+        // Mots-clés CONDITIONNELS (si pertinents)
         if (processedKeywords.length > 0) {
-            promptParts.push(`\nMOTS-CLÉS À INTÉGRER (seulement si pertinents avec l'image) :\n${processedKeywords.join(', ')}`);
-            promptParts.push("Intègre naturellement ces mots-clés dans le titre, l'alt et la description UNIQUEMENT s'ils sont cohérents avec le contenu visuel de l'image.");
+            promptParts.push(`\nMOTS-CLÉS CONDITIONNELS (seulement si pertinents avec l'image) :\n${processedKeywords.join(', ')}`);
+            promptParts.push("Intègre ces mots-clés UNIQUEMENT s'ils sont cohérents avec le contenu visuel de l'image.");
         }
         
         promptParts.push("\nRéponds UNIQUEMENT avec un JSON valide au format :");
@@ -478,7 +496,10 @@ app.post('/seo', upload.fields([
         console.log(`   Alt : ${seoData.alt?.substring(0, 50)}...`);
         console.log(`${'─'.repeat(50)}\n`);
         
-        res.json({ seo: seoData, keywordsUsed: processedKeywords });
+        res.json({ 
+            seo: seoData, 
+            keywordsUsed: [...processedKeywordsForced, ...processedKeywords]
+        });
         
     } catch (error) {
         console.error("❌ Erreur SEO:", error.message);
