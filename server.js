@@ -64,7 +64,7 @@ function applyQualityBonus(baseQuality, bonus) {
     return Math.min(95, baseQuality + bonus);
 }
 
-app.get('/', (req, res) => res.send('🏭 Usine V12 - Tailles personnalisables'));
+app.get('/', (req, res) => res.send('🏭 Usine V13 - Original Only + Tailles personnalisables'));
 
 // Route principale
 app.post('/process', (req, res, next) => {
@@ -73,7 +73,8 @@ app.post('/process', (req, res, next) => {
 }, upload.fields([
     { name: 'image', maxCount: 1 },
     { name: 'qualities', maxCount: 1 },
-    { name: 'sizes', maxCount: 1 }  // 🆕 Tailles personnalisées
+    { name: 'sizes', maxCount: 1 },
+    { name: 'originalOnly', maxCount: 1 }  // 🆕
 ]), async (req, res) => {
     
     // 1. SÉCURITÉ
@@ -142,52 +143,68 @@ app.post('/process', (req, res, next) => {
         const tasks = [];
 
         // --- TÂCHE A : CONVERSION AVIF ---
-        // 🆕 V12 : Tailles personnalisées depuis WordPress
-        let configuredSizes = {
-            mobile: 480,
-            tablet: 768,
-            desktop: 1280,
-            large: 1920
-        };
+        // 🆕 V12 : Tailles personnalisées + mode originalOnly
         
-        // Récupérer les tailles envoyées par WordPress
-        if (req.body && req.body.sizes) {
-            try {
-                const customSizes = JSON.parse(req.body.sizes);
-                configuredSizes = {};
-                for (const [name, width] of Object.entries(customSizes)) {
-                    configuredSizes[name] = parseInt(width);
+        // Vérifier le mode "taille originale uniquement"
+        const originalOnly = req.body && req.body.originalOnly === '1';
+        
+        let sizes = [];
+        
+        if (originalOnly) {
+            // 🆕 Mode "taille originale uniquement" : une seule image à la taille source
+            const quality = finalQualities.original || finalQualities.large || 65;
+            sizes = [{ name: 'original', width: imageInfo.width, quality }];
+            console.log(`\n📷 Mode ORIGINAL ONLY : ${imageInfo.width}px @ Q${quality}`);
+        } else {
+            // Mode responsive : plusieurs tailles
+            let configuredSizes = {
+                mobile: 480,
+                tablet: 768,
+                desktop: 1280,
+                large: 1920
+            };
+            
+            // Récupérer les tailles envoyées par WordPress
+            if (req.body && req.body.sizes) {
+                try {
+                    const customSizes = JSON.parse(req.body.sizes);
+                    configuredSizes = {};
+                    for (const [name, width] of Object.entries(customSizes)) {
+                        if (name !== 'original') { // Ignorer "original" des tailles configurées
+                            configuredSizes[name] = parseInt(width);
+                        }
+                    }
+                    console.log(`📐 Tailles configurées :`, configuredSizes);
+                } catch (e) {
+                    console.log(`   ⚠️ Tailles invalides, utilisation des défauts`);
                 }
-                console.log(`📐 Tailles configurées :`, configuredSizes);
-            } catch (e) {
-                console.log(`   ⚠️ Tailles invalides, utilisation des défauts`);
+            }
+            
+            // Construire la liste des tailles à générer
+            const allSizes = Object.entries(configuredSizes).map(([name, width]) => ({
+                name,
+                width,
+                quality: finalQualities[name] || 60
+            })).sort((a, b) => a.width - b.width);
+            
+            // Filtrer : garder seulement les tailles ≤ largeur originale
+            sizes = allSizes.filter(s => s.width <= imageInfo.width);
+            
+            // Si l'image est plus petite que la plus petite taille, générer quand même une version
+            if (sizes.length === 0 && allSizes.length > 0) {
+                const smallest = allSizes[0];
+                sizes.push({ name: smallest.name, width: imageInfo.width, quality: smallest.quality });
+            }
+            
+            // Ajouter une taille "originale" si l'image ne correspond à aucun breakpoint exact
+            const maxFilteredWidth = sizes.length > 0 ? Math.max(...sizes.map(s => s.width)) : 0;
+            const maxConfiguredWidth = Object.values(configuredSizes).length > 0 ? Math.max(...Object.values(configuredSizes)) : 1920;
+            if (imageInfo.width > maxFilteredWidth && imageInfo.width < maxConfiguredWidth) {
+                sizes.push({ name: 'original', width: imageInfo.width, quality: finalQualities.large || 55 });
             }
         }
-        
-        // Construire la liste des tailles à générer
-        const allSizes = Object.entries(configuredSizes).map(([name, width]) => ({
-            name,
-            width,
-            quality: finalQualities[name] || 60
-        })).sort((a, b) => a.width - b.width); // Trier par largeur croissante
-        
-        // Filtrer : garder seulement les tailles ≤ largeur originale
-        let sizes = allSizes.filter(s => s.width <= imageInfo.width);
-        
-        // Si l'image est plus petite que la plus petite taille, générer quand même une version
-        if (sizes.length === 0) {
-            const smallest = allSizes[0];
-            sizes.push({ name: smallest.name, width: imageInfo.width, quality: smallest.quality });
-        }
-        
-        // Ajouter une taille "originale" si l'image ne correspond à aucun breakpoint exact
-        const maxFilteredWidth = sizes.length > 0 ? Math.max(...sizes.map(s => s.width)) : 0;
-        const maxConfiguredWidth = Math.max(...Object.values(configuredSizes));
-        if (imageInfo.width > maxFilteredWidth && imageInfo.width < maxConfiguredWidth) {
-            sizes.push({ name: 'original', width: imageInfo.width, quality: finalQualities.large || 55 });
-        }
 
-        console.log(`\n📦 Génération AVIF (${sizes.length}/${allSizes.length} tailles) :`);
+        console.log(`\n📦 Génération AVIF (${sizes.length} taille${sizes.length > 1 ? 's' : ''}) :`);
 
         sizes.forEach(size => {
             tasks.push(
@@ -274,4 +291,4 @@ app.post('/process', (req, res, next) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🏭 Usine V12 démarrée sur le port ${PORT}`));
+app.listen(PORT, () => console.log(`🏭 Usine V13 démarrée sur le port ${PORT}`));
