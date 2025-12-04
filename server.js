@@ -15,12 +15,13 @@ const upload = multer({
 const API_KEY_GEMINI = process.env.GEMINI_API_KEY; 
 const SECRET_TOKEN = process.env.MY_SECRET_TOKEN;
 
-// Qualités par défaut
+// 🆕 QUALITÉS PAR DÉFAUT INVERSÉES
+// Plus de qualité pour les petites tailles (artefacts plus visibles)
 const DEFAULT_QUALITIES = {
-    mobile: 50,
-    tablet: 55,
-    desktop: 60,
-    large: 70
+    mobile: 70,   // ↑ Était 50 - petite image = qualité haute
+    tablet: 65,   // ↑ Était 55
+    desktop: 60,  // = Inchangé
+    large: 55     // ↓ Était 70 - grande image = on peut compresser plus
 };
 
 // ==============================================================================
@@ -34,25 +35,20 @@ function analyzeSourceQuality(fileSize, width, height) {
     let qualityLevel = '';
     
     if (bytesPerPixel >= 0.5) {
-        // Image haute qualité (PNG, JPEG 90+, RAW)
         qualityLevel = '🟢 Excellente';
         qualityBonus = 0;
     } else if (bytesPerPixel >= 0.2) {
-        // Image bonne qualité (JPEG 70-90)
         qualityLevel = '🟢 Bonne';
         qualityBonus = 0;
     } else if (bytesPerPixel >= 0.1) {
-        // Image qualité moyenne (JPEG 50-70, WebP)
         qualityLevel = '🟡 Moyenne';
         qualityBonus = 10;
     } else if (bytesPerPixel >= 0.05) {
-        // Image déjà compressée (JPEG < 50)
         qualityLevel = '🟠 Faible';
         qualityBonus = 15;
     } else {
-        // Image très compressée (risque d'artefacts)
         qualityLevel = '🔴 Très faible';
-        qualityBonus = 25;
+        qualityBonus = 20;
     }
     
     return {
@@ -63,12 +59,12 @@ function analyzeSourceQuality(fileSize, width, height) {
     };
 }
 
-// Applique le bonus de qualité sans dépasser 95
+// Applique le bonus sans dépasser 95
 function applyQualityBonus(baseQuality, bonus) {
     return Math.min(95, baseQuality + bonus);
 }
 
-app.get('/', (req, res) => res.send('🏭 Usine V8 - Détection intelligente de qualité'));
+app.get('/', (req, res) => res.send('🏭 Usine V10 - Optimisée vitesse + qualité'));
 
 // Route principale
 app.post('/process', (req, res, next) => {
@@ -111,7 +107,7 @@ app.post('/process', (req, res, next) => {
             console.log(`   🧠 Compensation : +${analysis.qualityBonus} qualité AVIF`);
         }
         
-        // 4. RÉCUPÉRER LES QUALITÉS DE BASE
+        // 4. RÉCUPÉRER LES QUALITÉS DE BASE (depuis WordPress ou défaut)
         let baseQualities = { ...DEFAULT_QUALITIES };
         
         if (req.body && req.body.qualities) {
@@ -136,15 +132,16 @@ app.post('/process', (req, res, next) => {
             large: applyQualityBonus(baseQualities.large, analysis.qualityBonus)
         };
         
-        console.log(`\n🎚️ Qualités AVIF finales :`);
-        console.log(`   mobile:  ${baseQualities.mobile} → ${finalQualities.mobile}`);
-        console.log(`   tablet:  ${baseQualities.tablet} → ${finalQualities.tablet}`);
-        console.log(`   desktop: ${baseQualities.desktop} → ${finalQualities.desktop}`);
-        console.log(`   large:   ${baseQualities.large} → ${finalQualities.large}`);
+        console.log(`\n🎚️ Qualités AVIF :`);
+        console.log(`   mobile:  ${finalQualities.mobile} (480px)`);
+        console.log(`   tablet:  ${finalQualities.tablet} (768px)`);
+        console.log(`   desktop: ${finalQualities.desktop} (1280px)`);
+        console.log(`   large:   ${finalQualities.large} (1920px)`);
 
         const tasks = [];
 
         // --- TÂCHE A : CONVERSION AVIF ---
+        // 🆕 V10 : Effort réduit pour éviter les timeouts
         const sizes = [
             { name: 'mobile', width: 480, quality: finalQualities.mobile },
             { name: 'tablet', width: 768, quality: finalQualities.tablet },
@@ -160,7 +157,7 @@ app.post('/process', (req, res, next) => {
                     .resize({ width: size.width, withoutEnlargement: true })
                     .toFormat('avif', { 
                         quality: size.quality, 
-                        effort: 4
+                        effort: 3  // Bon compromis vitesse/qualité
                     })
                     .toBuffer()
                     .then(buffer => {
@@ -217,11 +214,12 @@ app.post('/process', (req, res, next) => {
             if (item.type === 'seo') responseData.seo = item.data;
         });
 
-        // Calcul de la réduction totale
+        // Stats
         const totalAvifSize = Object.values(responseData.images).reduce((acc, b64) => {
             return acc + Buffer.from(b64, 'base64').length;
         }, 0);
-        const reduction = ((1 - (totalAvifSize / 4) / imageFile.size) * 100).toFixed(0);
+        const avgSize = totalAvifSize / 4;
+        const reduction = ((1 - avgSize / imageFile.size) * 100).toFixed(0);
         
         console.log(`\n✅ Terminé !`);
         console.log(`   ${Object.keys(responseData.images).length} AVIF générés`);
@@ -237,4 +235,4 @@ app.post('/process', (req, res, next) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🏭 Usine V8 (Smart Quality) démarrée sur le port ${PORT}`));
+app.listen(PORT, () => console.log(`🏭 Usine V10 démarrée sur le port ${PORT}`));
