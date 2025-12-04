@@ -4,7 +4,6 @@ const sharp = require('sharp');
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 const app = express();
-
 // Configuration de l'upload (20 Mo max)
 const upload = multer({ 
     storage: multer.memoryStorage(), 
