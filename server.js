@@ -23,11 +23,56 @@ const DEFAULT_QUALITIES = {
     large: 70
 };
 
-app.get('/', (req, res) => res.send('🏭 Usine V7 - Qualités AVIF configurables'));
+// ==============================================================================
+// 🧠 DÉTECTION INTELLIGENTE DE LA QUALITÉ SOURCE
+// ==============================================================================
+function analyzeSourceQuality(fileSize, width, height) {
+    const pixels = width * height;
+    const bytesPerPixel = fileSize / pixels;
+    
+    let qualityBonus = 0;
+    let qualityLevel = '';
+    
+    if (bytesPerPixel >= 0.5) {
+        // Image haute qualité (PNG, JPEG 90+, RAW)
+        qualityLevel = '🟢 Excellente';
+        qualityBonus = 0;
+    } else if (bytesPerPixel >= 0.2) {
+        // Image bonne qualité (JPEG 70-90)
+        qualityLevel = '🟢 Bonne';
+        qualityBonus = 0;
+    } else if (bytesPerPixel >= 0.1) {
+        // Image qualité moyenne (JPEG 50-70, WebP)
+        qualityLevel = '🟡 Moyenne';
+        qualityBonus = 10;
+    } else if (bytesPerPixel >= 0.05) {
+        // Image déjà compressée (JPEG < 50)
+        qualityLevel = '🟠 Faible';
+        qualityBonus = 15;
+    } else {
+        // Image très compressée (risque d'artefacts)
+        qualityLevel = '🔴 Très faible';
+        qualityBonus = 25;
+    }
+    
+    return {
+        pixels,
+        bytesPerPixel: bytesPerPixel.toFixed(3),
+        qualityLevel,
+        qualityBonus
+    };
+}
+
+// Applique le bonus de qualité sans dépasser 95
+function applyQualityBonus(baseQuality, bonus) {
+    return Math.min(95, baseQuality + bonus);
+}
+
+app.get('/', (req, res) => res.send('🏭 Usine V8 - Détection intelligente de qualité'));
 
 // Route principale
 app.post('/process', (req, res, next) => {
-    console.log("📨 REQUÊTE REÇUE !");
+    console.log("\n📨 REQUÊTE REÇUE !");
     next();
 }, upload.fields([
     { name: 'image', maxCount: 1 },
@@ -49,38 +94,65 @@ app.post('/process', (req, res, next) => {
 
     try {
         const imageFile = req.files.image[0];
-        console.log(`✅ Image : ${imageFile.originalname} (${imageFile.size} bytes)`);
+        const inputBuffer = imageFile.buffer;
         
-        // 3. RÉCUPÉRER LES QUALITÉS (depuis le formulaire ou défaut)
-        let qualities = { ...DEFAULT_QUALITIES };
+        console.log(`📁 Image : ${imageFile.originalname}`);
+        console.log(`   Poids : ${(imageFile.size / 1024).toFixed(1)} Ko`);
+        
+        // 3. ANALYSER L'IMAGE SOURCE
+        const imageInfo = await sharp(inputBuffer).metadata();
+        const analysis = analyzeSourceQuality(imageFile.size, imageInfo.width, imageInfo.height);
+        
+        console.log(`   Dimensions : ${imageInfo.width} x ${imageInfo.height} (${(analysis.pixels / 1000000).toFixed(1)} Mpx)`);
+        console.log(`   Ratio : ${analysis.bytesPerPixel} octets/pixel`);
+        console.log(`   Qualité source : ${analysis.qualityLevel}`);
+        
+        if (analysis.qualityBonus > 0) {
+            console.log(`   🧠 Compensation : +${analysis.qualityBonus} qualité AVIF`);
+        }
+        
+        // 4. RÉCUPÉRER LES QUALITÉS DE BASE
+        let baseQualities = { ...DEFAULT_QUALITIES };
         
         if (req.body && req.body.qualities) {
             try {
                 const customQualities = JSON.parse(req.body.qualities);
-                qualities = {
+                baseQualities = {
                     mobile: parseInt(customQualities.mobile) || DEFAULT_QUALITIES.mobile,
                     tablet: parseInt(customQualities.tablet) || DEFAULT_QUALITIES.tablet,
                     desktop: parseInt(customQualities.desktop) || DEFAULT_QUALITIES.desktop,
                     large: parseInt(customQualities.large) || DEFAULT_QUALITIES.large
                 };
-                console.log(`🎚️ Qualités personnalisées :`, qualities);
             } catch (e) {
-                console.log(`⚠️ Qualités invalides, utilisation des défauts`);
+                console.log(`   ⚠️ Qualités invalides, utilisation des défauts`);
             }
-        } else {
-            console.log(`🎚️ Qualités par défaut :`, qualities);
         }
         
-        const inputBuffer = imageFile.buffer;
+        // 5. APPLIQUER LE BONUS DE QUALITÉ
+        const finalQualities = {
+            mobile: applyQualityBonus(baseQualities.mobile, analysis.qualityBonus),
+            tablet: applyQualityBonus(baseQualities.tablet, analysis.qualityBonus),
+            desktop: applyQualityBonus(baseQualities.desktop, analysis.qualityBonus),
+            large: applyQualityBonus(baseQualities.large, analysis.qualityBonus)
+        };
+        
+        console.log(`\n🎚️ Qualités AVIF finales :`);
+        console.log(`   mobile:  ${baseQualities.mobile} → ${finalQualities.mobile}`);
+        console.log(`   tablet:  ${baseQualities.tablet} → ${finalQualities.tablet}`);
+        console.log(`   desktop: ${baseQualities.desktop} → ${finalQualities.desktop}`);
+        console.log(`   large:   ${baseQualities.large} → ${finalQualities.large}`);
+
         const tasks = [];
 
-        // --- TÂCHE A : CONVERSION AVIF (4 Tailles avec qualités différentes) ---
+        // --- TÂCHE A : CONVERSION AVIF ---
         const sizes = [
-            { name: 'mobile', width: 480, quality: qualities.mobile },
-            { name: 'tablet', width: 768, quality: qualities.tablet },
-            { name: 'desktop', width: 1280, quality: qualities.desktop },
-            { name: 'large', width: 1920, quality: qualities.large }
+            { name: 'mobile', width: 480, quality: finalQualities.mobile },
+            { name: 'tablet', width: 768, quality: finalQualities.tablet },
+            { name: 'desktop', width: 1280, quality: finalQualities.desktop },
+            { name: 'large', width: 1920, quality: finalQualities.large }
         ];
+
+        console.log(`\n📦 Génération AVIF :`);
 
         sizes.forEach(size => {
             tasks.push(
@@ -88,16 +160,16 @@ app.post('/process', (req, res, next) => {
                     .resize({ width: size.width, withoutEnlargement: true })
                     .toFormat('avif', { 
                         quality: size.quality, 
-                        effort: 4  // Un peu plus d'effort pour meilleure compression
+                        effort: 4
                     })
                     .toBuffer()
                     .then(buffer => {
                         const sizeKo = (buffer.length / 1024).toFixed(1);
-                        console.log(`   📦 ${size.name}: ${size.width}px @ Q${size.quality} → ${sizeKo} Ko`);
+                        console.log(`   ${size.name}: ${size.width}px @ Q${size.quality} → ${sizeKo} Ko`);
                         return { type: 'image', size: size.name, data: buffer.toString('base64') };
                     })
                     .catch(err => { 
-                        console.error(`❌ Erreur Sharp ${size.name}:`, err.message); 
+                        console.error(`   ❌ Erreur ${size.name}:`, err.message); 
                         return null; 
                     })
             );
@@ -110,13 +182,12 @@ app.post('/process', (req, res, next) => {
                     const genAI = new GoogleGenerativeAI(API_KEY_GEMINI);
                     const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
                     
-                    // Compression pour Gemini
                     const compressedBuffer = await sharp(inputBuffer)
                         .resize({ width: 800, withoutEnlargement: true })
                         .jpeg({ quality: 70 })
                         .toBuffer();
                     
-                    console.log(`🤖 Envoi à Gemini : ${(compressedBuffer.length / 1024).toFixed(0)} Ko`);
+                    console.log(`\n🤖 Gemini : analyse en cours...`);
                     
                     const prompt = "Expert SEO. Analyse cette image. Retourne UNIQUEMENT un JSON valide : { 'title': '...', 'alt': '...', 'description': '...' }. Langue : Français.";
                     
@@ -126,17 +197,17 @@ app.post('/process', (req, res, next) => {
                     ]);
                     
                     const text = result.response.text().replace(/```json|```/g, '').trim();
-                    console.log("✅ Gemini OK");
+                    console.log(`   ✅ Gemini OK`);
                     return { type: 'seo', data: JSON.parse(text) };
 
                 } catch (err) {
-                    console.error("⚠️ Gemini échoué:", err.message);
+                    console.error(`   ⚠️ Gemini échoué:`, err.message);
                     return { type: 'seo', data: null };
                 }
             })());
         }
 
-        // 4. ATTENTE ET RÉPONSE
+        // 6. ATTENTE ET RÉPONSE
         const results = await Promise.all(tasks);
         const responseData = { images: {}, seo: null };
 
@@ -146,7 +217,17 @@ app.post('/process', (req, res, next) => {
             if (item.type === 'seo') responseData.seo = item.data;
         });
 
-        console.log(`✅ Terminé : ${Object.keys(responseData.images).length} AVIF générés\n`);
+        // Calcul de la réduction totale
+        const totalAvifSize = Object.values(responseData.images).reduce((acc, b64) => {
+            return acc + Buffer.from(b64, 'base64').length;
+        }, 0);
+        const reduction = ((1 - (totalAvifSize / 4) / imageFile.size) * 100).toFixed(0);
+        
+        console.log(`\n✅ Terminé !`);
+        console.log(`   ${Object.keys(responseData.images).length} AVIF générés`);
+        console.log(`   Réduction moyenne : ${reduction}%`);
+        console.log(`${'─'.repeat(50)}\n`);
+        
         res.json(responseData);
 
     } catch (error) {
@@ -156,4 +237,4 @@ app.post('/process', (req, res, next) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🏭 Usine V7 démarrée sur le port ${PORT}`));
+app.listen(PORT, () => console.log(`🏭 Usine V8 (Smart Quality) démarrée sur le port ${PORT}`));
