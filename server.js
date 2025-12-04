@@ -74,14 +74,14 @@ function applyQualityBonus(baseQuality, bonus) {
 
 app.get('/', (req, res) => {
     const mem = process.memoryUsage();
-    res.send(`🏭 Usine V14.3 - RAM: ${Math.round(mem.heapUsed / 1024 / 1024)} Mo | Requêtes: ${requestCount}`);
+    res.send(`🏭 Usine V15.0 - RAM: ${Math.round(mem.heapUsed / 1024 / 1024)} Mo | Requêtes: ${requestCount}`);
 });
 
-// 🆕 V14.2 : Route de monitoring détaillé
+// Route de monitoring détaillé
 app.get('/health', (req, res) => {
     const mem = process.memoryUsage();
     res.json({
-        version: '14.3',
+        version: '15.0',
         status: 'ok',
         requests: requestCount,
         memory: {
@@ -373,13 +373,20 @@ app.post('/process', (req, res, next) => {
 // ==============================================================================
 // 🆕 ROUTE SEO UNIQUEMENT (Gemini)
 // ==============================================================================
+// ==============================================================================
+// 🆕 V15.0 : ROUTE SEO UNIVERSELLE
+// ==============================================================================
 app.post('/seo', upload.fields([
     { name: 'image', maxCount: 1 },
     { name: 'customPrompt', maxCount: 1 },
-    { name: 'keywords', maxCount: 1 },
-    { name: 'keywordsForced', maxCount: 1 }  // 🆕 V14.3 : Mots-clés obligatoires
+    { name: 'brandName', maxCount: 1 },
+    { name: 'brandSector', maxCount: 1 },
+    { name: 'brandConditional', maxCount: 1 },
+    { name: 'categories', maxCount: 1 }
 ]), async (req, res) => {
-    console.log("\n📨 REQUÊTE SEO REÇUE !");
+    console.log("\n" + "═".repeat(60));
+    console.log("📨 REQUÊTE SEO UNIVERSELLE");
+    console.log("═".repeat(60));
     
     try {
         // Vérification du token
@@ -402,47 +409,34 @@ app.post('/seo', upload.fields([
         
         // Récupérer les paramètres
         const customPrompt = req.body?.customPrompt || '';
-        const keywordsRaw = req.body?.keywords || '';
-        const keywordsForcedRaw = req.body?.keywordsForced || '';  // 🆕
+        const brandName = req.body?.brandName || '';
+        const brandSector = req.body?.brandSector || '';
+        const brandConditional = req.body?.brandConditional === '1';
+        const categoriesRaw = req.body?.categories || '';
         
-        if (customPrompt) {
-            console.log(`   📝 Prompt personnalisé`);
+        console.log(`\n⚙️ Configuration :`);
+        if (brandName) {
+            console.log(`   🏢 Marque : ${brandName}`);
+            console.log(`   📋 Secteur : ${brandSector ? brandSector.substring(0, 50) + '...' : '(non défini)'}`);
+            console.log(`   🎯 Application : ${brandConditional ? 'Intelligente (si pertinent)' : 'Systématique'}`);
+        } else {
+            console.log(`   🏢 Marque : (aucune)`);
         }
         
-        // Fonction pour traiter les mots-clés (avec groupes)
-        function processKeywordString(raw, label) {
-            const result = [];
-            if (!raw) return result;
-            
-            const parts = raw.split(/,(?![^\[]*\])/);  // Split par virgule sauf dans les crochets
-            
-            for (let part of parts) {
-                part = part.trim();
-                if (part.startsWith('[') && part.endsWith(']')) {
-                    // C'est un groupe : choisir UN mot aléatoire
-                    const groupContent = part.slice(1, -1);
-                    const options = groupContent.split(',').map(s => s.trim()).filter(Boolean);
-                    if (options.length > 0) {
-                        const chosen = options[Math.floor(Math.random() * options.length)];
-                        result.push(chosen);
-                        console.log(`   🎲 ${label} [${options.join(', ')}] → "${chosen}"`);
-                    }
-                } else if (part) {
-                    result.push(part);
+        // Parser les catégories thématiques
+        // Format : "CATÉGORIE: mot1, mot2, mot3" (une par ligne)
+        const categories = [];
+        if (categoriesRaw) {
+            const lines = categoriesRaw.split('\n').filter(l => l.trim() && l.includes(':'));
+            for (const line of lines) {
+                const colonIndex = line.indexOf(':');
+                const catName = line.substring(0, colonIndex).trim();
+                const keywords = line.substring(colonIndex + 1).split(',').map(k => k.trim()).filter(Boolean);
+                if (catName && keywords.length > 0) {
+                    categories.push({ name: catName, keywords });
                 }
             }
-            return result;
-        }
-        
-        // Traiter les deux types de mots-clés
-        const processedKeywords = processKeywordString(keywordsRaw, '🏷️');
-        const processedKeywordsForced = processKeywordString(keywordsForcedRaw, '🔒');
-        
-        if (processedKeywords.length > 0) {
-            console.log(`   🏷️ Conditionnels : ${processedKeywords.join(', ')}`);
-        }
-        if (processedKeywordsForced.length > 0) {
-            console.log(`   🔒 Obligatoires : ${processedKeywordsForced.join(', ')}`);
+            console.log(`   🏷️ Catégories : ${categories.length} configurées`);
         }
         
         const genAI = new GoogleGenerativeAI(API_KEY_GEMINI);
@@ -454,51 +448,165 @@ app.post('/seo', upload.fields([
             .jpeg({ quality: 70 })
             .toBuffer();
         
-        console.log(`🤖 Gemini : analyse en cours...`);
+        const imageData = { inlineData: { data: compressedBuffer.toString('base64'), mimeType: 'image/jpeg' } };
         
-        // Construire le prompt
-        let promptParts = [];
-        promptParts.push("Tu es un expert SEO spécialisé dans l'optimisation d'images pour le web.");
-        promptParts.push("Analyse cette image et génère des métadonnées SEO optimisées.");
+        // =================================================================
+        // ÉTAPE 1 : Analyse de l'image et détection de pertinence
+        // =================================================================
+        let imageIsRelevant = true;  // Par défaut, on considère l'image pertinente
+        let imageAnalysis = null;
         
+        if (brandConditional && brandSector) {
+            console.log(`\n🔍 Étape 1 : Analyse de pertinence...`);
+            
+            const analysisPrompt = `Analyse cette image et réponds UNIQUEMENT avec un JSON valide.
+
+SECTEUR D'ACTIVITÉ À VÉRIFIER : ${brandSector}
+
+Questions à répondre :
+1. L'image est-elle une photo/illustration liée à ce secteur d'activité ?
+2. Quel est le type d'image ? (photo de produit/service, photo d'ambiance, icône/pictogramme, illustration, logo, capture d'écran, autre)
+
+Réponds UNIQUEMENT avec ce JSON :
+{
+  "isRelevant": true ou false,
+  "imageType": "type d'image",
+  "reason": "explication courte"
+}`;
+
+            try {
+                const analysisResult = await model.generateContent([analysisPrompt, imageData]);
+                const analysisText = analysisResult.response.text().replace(/```json|```/g, '').trim();
+                imageAnalysis = JSON.parse(analysisText);
+                imageIsRelevant = imageAnalysis.isRelevant === true;
+                
+                console.log(`   Type : ${imageAnalysis.imageType}`);
+                console.log(`   Pertinente : ${imageIsRelevant ? '✅ Oui' : '❌ Non'}`);
+                if (!imageIsRelevant) {
+                    console.log(`   Raison : ${imageAnalysis.reason}`);
+                }
+            } catch (e) {
+                console.log(`   ⚠️ Analyse échouée, on considère pertinent par défaut`);
+                imageIsRelevant = true;
+            }
+        }
+        
+        // =================================================================
+        // ÉTAPE 2 : Sélection des mots-clés par catégorie
+        // =================================================================
+        const selectedKeywords = {};
+        
+        if (categories.length > 0 && imageIsRelevant) {
+            console.log(`\n🏷️ Étape 2 : Sélection des mots-clés...`);
+            
+            // Construire la liste des catégories pour Gemini
+            let categoriesPrompt = `Analyse cette image et pour chaque catégorie, choisis LE MOT LE PLUS PERTINENT parmi les options proposées.
+Si aucun mot n'est pertinent pour une catégorie, réponds "null" pour cette catégorie.
+
+CATÉGORIES :\n`;
+            
+            for (const cat of categories) {
+                categoriesPrompt += `${cat.name}: ${cat.keywords.join(', ')}\n`;
+            }
+            
+            categoriesPrompt += `\nRéponds UNIQUEMENT avec un JSON où chaque clé est le nom de la catégorie et la valeur est le mot choisi (ou null) :
+{
+${categories.map(c => `  "${c.name}": "mot choisi ou null"`).join(',\n')}
+}`;
+
+            try {
+                const keywordsResult = await model.generateContent([categoriesPrompt, imageData]);
+                const keywordsText = keywordsResult.response.text().replace(/```json|```/g, '').trim();
+                const keywordsData = JSON.parse(keywordsText);
+                
+                for (const cat of categories) {
+                    const chosen = keywordsData[cat.name];
+                    if (chosen && chosen !== 'null' && chosen !== null) {
+                        // Vérifier que le mot fait bien partie des options
+                        const normalizedChosen = chosen.toLowerCase().trim();
+                        const matchedKeyword = cat.keywords.find(k => k.toLowerCase().trim() === normalizedChosen);
+                        if (matchedKeyword) {
+                            selectedKeywords[cat.name] = matchedKeyword;
+                            console.log(`   ${cat.name}: "${matchedKeyword}"`);
+                        }
+                    }
+                }
+                
+                if (Object.keys(selectedKeywords).length === 0) {
+                    console.log(`   (aucun mot-clé sélectionné)`);
+                }
+            } catch (e) {
+                console.log(`   ⚠️ Sélection échouée : ${e.message}`);
+            }
+        }
+        
+        // =================================================================
+        // ÉTAPE 3 : Génération du SEO
+        // =================================================================
+        console.log(`\n✍️ Étape 3 : Génération du SEO...`);
+        
+        let seoPrompt = `Tu es un expert SEO. Génère les métadonnées optimisées pour cette image.
+
+`;
+        
+        // Instructions personnalisées
         if (customPrompt) {
-            promptParts.push(`\nCONTEXTE ET INSTRUCTIONS SPÉCIFIQUES :\n${customPrompt}`);
+            seoPrompt += `INSTRUCTIONS DE STYLE :\n${customPrompt}\n\n`;
         }
         
-        // 🆕 Mots-clés OBLIGATOIRES (toujours intégrés)
-        if (processedKeywordsForced.length > 0) {
-            promptParts.push(`\nMOTS-CLÉS OBLIGATOIRES (à intégrer OBLIGATOIREMENT dans le texte) :\n${processedKeywordsForced.join(', ')}`);
-            promptParts.push("Ces mots-clés DOIVENT apparaître dans le titre, l'alt ou la description. Intègre-les naturellement.");
+        // Marque (si pertinente ou si mode systématique)
+        const applyBrand = brandName && (imageIsRelevant || !brandConditional);
+        
+        if (applyBrand) {
+            seoPrompt += `MARQUE : ${brandName}
+RÈGLES POUR LA MARQUE :
+- TITRE : Ajoute "${brandName}" à la FIN, séparé par " - " ou " | "
+  Exemple : "Description de l'image - ${brandName}"
+- ALT : NE JAMAIS inclure la marque ! L'alt décrit UNIQUEMENT ce qui est visible.
+- DESCRIPTION : Mentionne "${brandName}" UNE SEULE FOIS, naturellement.
+
+`;
         }
         
-        // Mots-clés CONDITIONNELS (si pertinents)
-        if (processedKeywords.length > 0) {
-            promptParts.push(`\nMOTS-CLÉS CONDITIONNELS (seulement si pertinents avec l'image) :\n${processedKeywords.join(', ')}`);
-            promptParts.push("Intègre ces mots-clés UNIQUEMENT s'ils sont cohérents avec le contenu visuel de l'image.");
+        // Mots-clés sélectionnés
+        const keywordsList = Object.values(selectedKeywords);
+        if (keywordsList.length > 0) {
+            seoPrompt += `MOTS-CLÉS À INTÉGRER (naturellement, si pertinent) :
+${keywordsList.join(', ')}
+
+`;
         }
         
-        promptParts.push("\nRéponds UNIQUEMENT avec un JSON valide au format :");
-        promptParts.push('{ "title": "Titre SEO (50-60 caractères)", "alt": "Texte alternatif descriptif (100-125 caractères)", "description": "Description détaillée (150-160 caractères)" }');
-        promptParts.push("\nLangue : Français uniquement.");
+        // Format de réponse
+        seoPrompt += `FORMAT DE RÉPONSE (JSON uniquement) :
+{
+  "title": "Titre accrocheur${applyBrand ? ' - ' + brandName : ''} (50-60 caractères max)",
+  "alt": "Description factuelle de ce qui est VISIBLE dans l'image (100-125 caractères, SANS marque)",
+  "description": "Description engageante${applyBrand ? ' mentionnant ' + brandName + ' une fois' : ''} (150-160 caractères)"
+}
+
+LANGUE : Français uniquement.
+IMPORTANT : Réponds UNIQUEMENT avec le JSON, sans commentaire.`;
+
+        const seoResult = await model.generateContent([seoPrompt, imageData]);
+        const seoText = seoResult.response.text().replace(/```json|```/g, '').trim();
+        const seoData = JSON.parse(seoText);
         
-        const finalPrompt = promptParts.join('\n');
-        
-        const result = await model.generateContent([
-            finalPrompt,
-            { inlineData: { data: compressedBuffer.toString('base64'), mimeType: 'image/jpeg' } }
-        ]);
-        
-        const text = result.response.text().replace(/```json|```/g, '').trim();
-        const seoData = JSON.parse(text);
-        
-        console.log(`✅ SEO généré !`);
-        console.log(`   Titre : ${seoData.title}`);
-        console.log(`   Alt : ${seoData.alt?.substring(0, 50)}...`);
-        console.log(`${'─'.repeat(50)}\n`);
+        // =================================================================
+        // RÉSULTAT
+        // =================================================================
+        console.log(`\n✅ SEO GÉNÉRÉ !`);
+        console.log(`   📌 Titre : ${seoData.title}`);
+        console.log(`   🖼️ Alt : ${seoData.alt?.substring(0, 60)}...`);
+        console.log(`   📝 Desc : ${seoData.description?.substring(0, 60)}...`);
+        console.log(`   🏢 Marque appliquée : ${applyBrand ? 'Oui' : 'Non'}`);
+        console.log("─".repeat(60) + "\n");
         
         res.json({ 
-            seo: seoData, 
-            keywordsUsed: [...processedKeywordsForced, ...processedKeywords]
+            seo: seoData,
+            brandApplied: applyBrand,
+            imageRelevant: imageIsRelevant,
+            categoriesUsed: Object.entries(selectedKeywords).map(([cat, kw]) => `${cat}:${kw}`)
         });
         
     } catch (error) {
@@ -508,4 +616,4 @@ app.post('/seo', upload.fields([
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🏭 Usine V14.3 démarrée sur le port ${PORT} (cache Sharp: OFF, concurrency: 1)`));
+app.listen(PORT, () => console.log(`🏭 Usine V15.0 démarrée sur le port ${PORT}`));
