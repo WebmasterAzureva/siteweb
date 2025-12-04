@@ -64,7 +64,7 @@ function applyQualityBonus(baseQuality, bonus) {
     return Math.min(95, baseQuality + bonus);
 }
 
-app.get('/', (req, res) => res.send('🏭 Usine V13 - Original Only + Tailles personnalisables'));
+app.get('/', (req, res) => res.send('🏭 Usine V14 - AVIF + SEO séparés'));
 
 // Route principale
 app.post('/process', (req, res, next) => {
@@ -74,7 +74,8 @@ app.post('/process', (req, res, next) => {
     { name: 'image', maxCount: 1 },
     { name: 'qualities', maxCount: 1 },
     { name: 'sizes', maxCount: 1 },
-    { name: 'originalOnly', maxCount: 1 }  // 🆕
+    { name: 'originalOnly', maxCount: 1 },
+    { name: 'skipGemini', maxCount: 1 }  // 🆕 Option pour skip le SEO
 ]), async (req, res) => {
     
     // 1. SÉCURITÉ
@@ -227,12 +228,14 @@ app.post('/process', (req, res, next) => {
             );
         });
 
-        // --- TÂCHE B : IA GEMINI ---
-        if (API_KEY_GEMINI) {
+        // --- TÂCHE B : IA GEMINI (optionnel) ---
+        const skipGemini = req.body && req.body.skipGemini === '1';
+        
+        if (API_KEY_GEMINI && !skipGemini) {
             tasks.push((async () => {
                 try {
                     const genAI = new GoogleGenerativeAI(API_KEY_GEMINI);
-                    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+                    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
                     
                     const compressedBuffer = await sharp(inputBuffer)
                         .resize({ width: 800, withoutEnlargement: true })
@@ -257,6 +260,8 @@ app.post('/process', (req, res, next) => {
                     return { type: 'seo', data: null };
                 }
             })());
+        } else if (skipGemini) {
+            console.log(`\n⏭️ Gemini : ignoré (skipGemini=1)`);
         }
 
         // 6. ATTENTE ET RÉPONSE
@@ -290,5 +295,63 @@ app.post('/process', (req, res, next) => {
     }
 });
 
+// ==============================================================================
+// 🆕 ROUTE SEO UNIQUEMENT (Gemini)
+// ==============================================================================
+app.post('/seo', upload.single('image'), async (req, res) => {
+    console.log("\n📨 REQUÊTE SEO REÇUE !");
+    
+    try {
+        // Vérification du token
+        const authHeader = req.headers['authorization'];
+        if (!authHeader || authHeader !== `Bearer ${SECRET_TOKEN}`) {
+            return res.status(401).json({ error: 'Token invalide' });
+        }
+        
+        if (!API_KEY_GEMINI) {
+            return res.status(500).json({ error: 'Clé Gemini non configurée' });
+        }
+        
+        const imageFile = req.file;
+        if (!imageFile) {
+            return res.status(400).json({ error: 'Aucune image reçue' });
+        }
+        
+        console.log(`📁 Image : ${imageFile.originalname}`);
+        console.log(`   Poids : ${(imageFile.size / 1024).toFixed(1)} Ko`);
+        
+        const genAI = new GoogleGenerativeAI(API_KEY_GEMINI);
+        const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+        
+        // Compresser l'image pour Gemini
+        const compressedBuffer = await sharp(imageFile.buffer)
+            .resize({ width: 800, withoutEnlargement: true })
+            .jpeg({ quality: 70 })
+            .toBuffer();
+        
+        console.log(`🤖 Gemini : analyse en cours...`);
+        
+        const prompt = "Expert SEO. Analyse cette image. Retourne UNIQUEMENT un JSON valide : { 'title': '...', 'alt': '...', 'description': '...' }. Langue : Français.";
+        
+        const result = await model.generateContent([
+            prompt,
+            { inlineData: { data: compressedBuffer.toString('base64'), mimeType: 'image/jpeg' } }
+        ]);
+        
+        const text = result.response.text().replace(/```json|```/g, '').trim();
+        const seoData = JSON.parse(text);
+        
+        console.log(`✅ SEO généré !`);
+        console.log(`   Titre : ${seoData.title}`);
+        console.log(`${'─'.repeat(50)}\n`);
+        
+        res.json({ seo: seoData });
+        
+    } catch (error) {
+        console.error("❌ Erreur SEO:", error.message);
+        res.status(500).json({ error: error.message });
+    }
+});
+
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🏭 Usine V13 démarrée sur le port ${PORT}`));
+app.listen(PORT, () => console.log(`🏭 Usine V14 démarrée sur le port ${PORT}`));
