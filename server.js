@@ -64,7 +64,7 @@ function applyQualityBonus(baseQuality, bonus) {
     return Math.min(95, baseQuality + bonus);
 }
 
-app.get('/', (req, res) => res.send('🏭 Usine V14 - AVIF + SEO séparés'));
+app.get('/', (req, res) => res.send('🏭 Usine V14.1 - Traitement séquentiel (économie RAM)'));
 
 // Route principale
 app.post('/process', (req, res, next) => {
@@ -141,10 +141,8 @@ app.post('/process', (req, res, next) => {
         console.log(`   desktop: ${finalQualities.desktop} (1280px)`);
         console.log(`   large:   ${finalQualities.large} (1920px)`);
 
-        const tasks = [];
-
         // --- TÂCHE A : CONVERSION AVIF ---
-        // 🆕 V12 : Tailles personnalisées + mode originalOnly
+        // 🆕 V14.1 : Traitement séquentiel pour économiser la RAM
         
         // Vérifier le mode "taille originale uniquement"
         const originalOnly = req.body && req.body.originalOnly === '1';
@@ -207,71 +205,67 @@ app.post('/process', (req, res, next) => {
 
         console.log(`\n📦 Génération AVIF (${sizes.length} taille${sizes.length > 1 ? 's' : ''}) :`);
 
-        sizes.forEach(size => {
-            tasks.push(
-                sharp(inputBuffer)
+        // 🆕 V14.1 : Traitement SÉQUENTIEL pour économiser la RAM
+        const imageResults = [];
+        for (const size of sizes) {
+            try {
+                const buffer = await sharp(inputBuffer)
                     .resize({ width: size.width, withoutEnlargement: true })
                     .toFormat('avif', { 
                         quality: size.quality, 
-                        effort: 3  // Bon compromis vitesse/qualité
+                        effort: 3
                     })
-                    .toBuffer()
-                    .then(buffer => {
-                        const sizeKo = (buffer.length / 1024).toFixed(1);
-                        console.log(`   ${size.name}: ${size.width}px @ Q${size.quality} → ${sizeKo} Ko`);
-                        return { type: 'image', size: size.name, data: buffer.toString('base64') };
-                    })
-                    .catch(err => { 
-                        console.error(`   ❌ Erreur ${size.name}:`, err.message); 
-                        return null; 
-                    })
-            );
-        });
+                    .toBuffer();
+                
+                const sizeKo = (buffer.length / 1024).toFixed(1);
+                console.log(`   ${size.name}: ${size.width}px @ Q${size.quality} → ${sizeKo} Ko`);
+                imageResults.push({ type: 'image', size: size.name, data: buffer.toString('base64') });
+                
+                // Libérer la mémoire
+                if (global.gc) global.gc();
+            } catch (err) {
+                console.error(`   ❌ Erreur ${size.name}:`, err.message);
+            }
+        }
 
         // --- TÂCHE B : IA GEMINI (optionnel) ---
         const skipGemini = req.body && req.body.skipGemini === '1';
+        let seoResult = null;
         
         if (API_KEY_GEMINI && !skipGemini) {
-            tasks.push((async () => {
-                try {
-                    const genAI = new GoogleGenerativeAI(API_KEY_GEMINI);
-                    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
-                    
-                    const compressedBuffer = await sharp(inputBuffer)
-                        .resize({ width: 800, withoutEnlargement: true })
-                        .jpeg({ quality: 70 })
-                        .toBuffer();
-                    
-                    console.log(`\n🤖 Gemini : analyse en cours...`);
-                    
-                    const prompt = "Expert SEO. Analyse cette image. Retourne UNIQUEMENT un JSON valide : { 'title': '...', 'alt': '...', 'description': '...' }. Langue : Français.";
-                    
-                    const result = await model.generateContent([
-                        prompt,
-                        { inlineData: { data: compressedBuffer.toString('base64'), mimeType: 'image/jpeg' } }
-                    ]);
-                    
-                    const text = result.response.text().replace(/```json|```/g, '').trim();
-                    console.log(`   ✅ Gemini OK`);
-                    return { type: 'seo', data: JSON.parse(text) };
-
-                } catch (err) {
-                    console.error(`   ⚠️ Gemini échoué:`, err.message);
-                    return { type: 'seo', data: null };
-                }
-            })());
+            try {
+                const genAI = new GoogleGenerativeAI(API_KEY_GEMINI);
+                const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+                
+                const compressedBuffer = await sharp(inputBuffer)
+                    .resize({ width: 800, withoutEnlargement: true })
+                    .jpeg({ quality: 70 })
+                    .toBuffer();
+                
+                console.log(`\n🤖 Gemini : analyse en cours...`);
+                
+                const prompt = "Expert SEO. Analyse cette image. Retourne UNIQUEMENT un JSON valide : { 'title': '...', 'alt': '...', 'description': '...' }. Langue : Français.";
+                
+                const result = await model.generateContent([
+                    prompt,
+                    { inlineData: { data: compressedBuffer.toString('base64'), mimeType: 'image/jpeg' } }
+                ]);
+                
+                const text = result.response.text().replace(/```json|```/g, '').trim();
+                console.log(`   ✅ Gemini OK`);
+                seoResult = JSON.parse(text);
+            } catch (err) {
+                console.error(`   ⚠️ Gemini échoué:`, err.message);
+            }
         } else if (skipGemini) {
             console.log(`\n⏭️ Gemini : ignoré (skipGemini=1)`);
         }
 
-        // 6. ATTENTE ET RÉPONSE
-        const results = await Promise.all(tasks);
-        const responseData = { images: {}, seo: null };
-
-        results.forEach(item => {
-            if (!item) return;
-            if (item.type === 'image') responseData.images[item.size] = item.data;
-            if (item.type === 'seo') responseData.seo = item.data;
+        // 6. RÉPONSE
+        const responseData = { images: {}, seo: seoResult };
+        
+        imageResults.forEach(item => {
+            responseData.images[item.size] = item.data;
         });
 
         // Stats
@@ -354,4 +348,4 @@ app.post('/seo', upload.single('image'), async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🏭 Usine V14 démarrée sur le port ${PORT}`));
+app.listen(PORT, () => console.log(`🏭 Usine V14.1 démarrée sur le port ${PORT}`));
