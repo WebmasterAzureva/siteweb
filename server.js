@@ -74,14 +74,14 @@ function applyQualityBonus(baseQuality, bonus) {
 
 app.get('/', (req, res) => {
     const mem = process.memoryUsage();
-    res.send(`🏭 Usine V14.2 - RAM: ${Math.round(mem.heapUsed / 1024 / 1024)} Mo | Requêtes: ${requestCount}`);
+    res.send(`🏭 Usine V14.3 - RAM: ${Math.round(mem.heapUsed / 1024 / 1024)} Mo | Requêtes: ${requestCount}`);
 });
 
 // 🆕 V14.2 : Route de monitoring détaillé
 app.get('/health', (req, res) => {
     const mem = process.memoryUsage();
     res.json({
-        version: '14.2',
+        version: '14.3',
         status: 'ok',
         requests: requestCount,
         memory: {
@@ -120,7 +120,7 @@ app.post('/process', (req, res, next) => {
     }
 
     try {
-        // 🆕 V14.2 : Monitoring mémoire
+        // 🆕 V14.3 : Monitoring mémoire
         requestCount++;
         const memBefore = process.memoryUsage();
         console.log(`\n${'='.repeat(60)}`);
@@ -130,7 +130,32 @@ app.post('/process', (req, res, next) => {
         let inputBuffer = imageFile.buffer;
         
         console.log(`📁 Image : ${imageFile.originalname}`);
-        console.log(`   Poids : ${(imageFile.size / 1024).toFixed(1)} Ko`);
+        console.log(`   Poids original : ${(imageFile.size / 1024).toFixed(1)} Ko`);
+        
+        // 🆕 V14.3 : Pré-compression si image trop grande (> 3000px)
+        // Ça réduit drastiquement l'usage mémoire pour les grandes images
+        const MAX_INPUT_SIZE = 3000;
+        const preInfo = await sharp(inputBuffer).metadata();
+        
+        if (preInfo.width > MAX_INPUT_SIZE || preInfo.height > MAX_INPUT_SIZE) {
+            console.log(`   ⚠️ Image trop grande (${preInfo.width}x${preInfo.height}), pré-compression...`);
+            
+            const preCompressed = await sharp(inputBuffer)
+                .resize({ 
+                    width: MAX_INPUT_SIZE, 
+                    height: MAX_INPUT_SIZE, 
+                    fit: 'inside',
+                    withoutEnlargement: true 
+                })
+                .png({ quality: 95, compressionLevel: 1 })  // PNG rapide, quasi sans perte
+                .toBuffer();
+            
+            // Libérer l'ancien buffer
+            inputBuffer = null;
+            inputBuffer = preCompressed;
+            
+            console.log(`   ✅ Réduit à ${(preCompressed.length / 1024).toFixed(1)} Ko`);
+        }
         
         // 3. ANALYSER L'IMAGE SOURCE
         const imageInfo = await sharp(inputBuffer).metadata();
@@ -348,7 +373,11 @@ app.post('/process', (req, res, next) => {
 // ==============================================================================
 // 🆕 ROUTE SEO UNIQUEMENT (Gemini)
 // ==============================================================================
-app.post('/seo', upload.single('image'), async (req, res) => {
+app.post('/seo', upload.fields([
+    { name: 'image', maxCount: 1 },
+    { name: 'customPrompt', maxCount: 1 },
+    { name: 'keywords', maxCount: 1 }
+]), async (req, res) => {
     console.log("\n📨 REQUÊTE SEO REÇUE !");
     
     try {
@@ -362,13 +391,48 @@ app.post('/seo', upload.single('image'), async (req, res) => {
             return res.status(500).json({ error: 'Clé Gemini non configurée' });
         }
         
-        const imageFile = req.file;
+        const imageFile = req.files?.image?.[0];
         if (!imageFile) {
             return res.status(400).json({ error: 'Aucune image reçue' });
         }
         
         console.log(`📁 Image : ${imageFile.originalname}`);
         console.log(`   Poids : ${(imageFile.size / 1024).toFixed(1)} Ko`);
+        
+        // 🆕 V14.3 : Récupérer le prompt personnalisé et les mots-clés
+        const customPrompt = req.body?.customPrompt || '';
+        const keywordsRaw = req.body?.keywords || '';
+        
+        if (customPrompt) {
+            console.log(`   📝 Prompt personnalisé : ${customPrompt.substring(0, 50)}...`);
+        }
+        if (keywordsRaw) {
+            console.log(`   🏷️ Mots-clés fournis`);
+        }
+        
+        // Traiter les mots-clés avec groupes
+        // Format : "vacances, [mer, océan, plage], montagne, [famille, couple]"
+        // Les crochets = groupe dont UN SEUL mot sera choisi aléatoirement
+        let processedKeywords = [];
+        if (keywordsRaw) {
+            const parts = keywordsRaw.split(/,(?![^\[]*\])/);  // Split par virgule sauf dans les crochets
+            
+            for (let part of parts) {
+                part = part.trim();
+                if (part.startsWith('[') && part.endsWith(']')) {
+                    // C'est un groupe : choisir UN mot aléatoire
+                    const groupContent = part.slice(1, -1);
+                    const options = groupContent.split(',').map(s => s.trim()).filter(Boolean);
+                    if (options.length > 0) {
+                        const chosen = options[Math.floor(Math.random() * options.length)];
+                        processedKeywords.push(chosen);
+                        console.log(`   🎲 Groupe [${options.join(', ')}] → "${chosen}"`);
+                    }
+                } else if (part) {
+                    processedKeywords.push(part);
+                }
+            }
+        }
         
         const genAI = new GoogleGenerativeAI(API_KEY_GEMINI);
         const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
@@ -381,10 +445,28 @@ app.post('/seo', upload.single('image'), async (req, res) => {
         
         console.log(`🤖 Gemini : analyse en cours...`);
         
-        const prompt = "Expert SEO. Analyse cette image. Retourne UNIQUEMENT un JSON valide : { 'title': '...', 'alt': '...', 'description': '...' }. Langue : Français.";
+        // Construire le prompt
+        let promptParts = [];
+        promptParts.push("Tu es un expert SEO spécialisé dans l'optimisation d'images pour le web.");
+        promptParts.push("Analyse cette image et génère des métadonnées SEO optimisées.");
+        
+        if (customPrompt) {
+            promptParts.push(`\nCONTEXTE ET INSTRUCTIONS SPÉCIFIQUES :\n${customPrompt}`);
+        }
+        
+        if (processedKeywords.length > 0) {
+            promptParts.push(`\nMOTS-CLÉS À INTÉGRER (seulement si pertinents avec l'image) :\n${processedKeywords.join(', ')}`);
+            promptParts.push("Intègre naturellement ces mots-clés dans le titre, l'alt et la description UNIQUEMENT s'ils sont cohérents avec le contenu visuel de l'image.");
+        }
+        
+        promptParts.push("\nRéponds UNIQUEMENT avec un JSON valide au format :");
+        promptParts.push('{ "title": "Titre SEO (50-60 caractères)", "alt": "Texte alternatif descriptif (100-125 caractères)", "description": "Description détaillée (150-160 caractères)" }');
+        promptParts.push("\nLangue : Français uniquement.");
+        
+        const finalPrompt = promptParts.join('\n');
         
         const result = await model.generateContent([
-            prompt,
+            finalPrompt,
             { inlineData: { data: compressedBuffer.toString('base64'), mimeType: 'image/jpeg' } }
         ]);
         
@@ -393,9 +475,10 @@ app.post('/seo', upload.single('image'), async (req, res) => {
         
         console.log(`✅ SEO généré !`);
         console.log(`   Titre : ${seoData.title}`);
+        console.log(`   Alt : ${seoData.alt?.substring(0, 50)}...`);
         console.log(`${'─'.repeat(50)}\n`);
         
-        res.json({ seo: seoData });
+        res.json({ seo: seoData, keywordsUsed: processedKeywords });
         
     } catch (error) {
         console.error("❌ Erreur SEO:", error.message);
@@ -404,4 +487,4 @@ app.post('/seo', upload.single('image'), async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🏭 Usine V14.2 démarrée sur le port ${PORT} (cache Sharp: OFF, concurrency: 1)`));
+app.listen(PORT, () => console.log(`🏭 Usine V14.3 démarrée sur le port ${PORT} (cache Sharp: OFF, concurrency: 1)`));
