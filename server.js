@@ -3,7 +3,13 @@ const multer = require('multer');
 const sharp = require('sharp');
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 
+// 🆕 V14.2 : Configuration Sharp pour éviter les fuites mémoire
+sharp.cache(false);  // Désactiver le cache Sharp
+sharp.concurrency(1);  // Une seule opération à la fois
+sharp.simd(true);  // Utiliser SIMD pour la performance
+
 const app = express();
+
 // Configuration de l'upload (20 Mo max)
 const upload = multer({ 
     storage: multer.memoryStorage(), 
@@ -13,6 +19,9 @@ const upload = multer({
 // Variables d'environnement
 const API_KEY_GEMINI = process.env.GEMINI_API_KEY; 
 const SECRET_TOKEN = process.env.MY_SECRET_TOKEN;
+
+// Compteur de requêtes pour monitoring mémoire
+let requestCount = 0;
 
 // 🆕 QUALITÉS PAR DÉFAUT INVERSÉES
 // Plus de qualité pour les petites tailles (artefacts plus visibles)
@@ -63,7 +72,27 @@ function applyQualityBonus(baseQuality, bonus) {
     return Math.min(95, baseQuality + bonus);
 }
 
-app.get('/', (req, res) => res.send('🏭 Usine V14.1 - Traitement séquentiel (économie RAM)'));
+app.get('/', (req, res) => {
+    const mem = process.memoryUsage();
+    res.send(`🏭 Usine V14.2 - RAM: ${Math.round(mem.heapUsed / 1024 / 1024)} Mo | Requêtes: ${requestCount}`);
+});
+
+// 🆕 V14.2 : Route de monitoring détaillé
+app.get('/health', (req, res) => {
+    const mem = process.memoryUsage();
+    res.json({
+        version: '14.2',
+        status: 'ok',
+        requests: requestCount,
+        memory: {
+            heapUsed: Math.round(mem.heapUsed / 1024 / 1024),
+            heapTotal: Math.round(mem.heapTotal / 1024 / 1024),
+            rss: Math.round(mem.rss / 1024 / 1024),
+            external: Math.round(mem.external / 1024 / 1024)
+        },
+        uptime: Math.round(process.uptime())
+    });
+});
 
 // Route principale
 app.post('/process', (req, res, next) => {
@@ -91,8 +120,14 @@ app.post('/process', (req, res, next) => {
     }
 
     try {
+        // 🆕 V14.2 : Monitoring mémoire
+        requestCount++;
+        const memBefore = process.memoryUsage();
+        console.log(`\n${'='.repeat(60)}`);
+        console.log(`📊 Requête #${requestCount} | RAM: ${Math.round(memBefore.heapUsed / 1024 / 1024)} Mo / ${Math.round(memBefore.heapTotal / 1024 / 1024)} Mo`);
+        
         const imageFile = req.files.image[0];
-        const inputBuffer = imageFile.buffer;
+        let inputBuffer = imageFile.buffer;
         
         console.log(`📁 Image : ${imageFile.originalname}`);
         console.log(`   Poids : ${(imageFile.size / 1024).toFixed(1)} Ko`);
@@ -204,11 +239,14 @@ app.post('/process', (req, res, next) => {
 
         console.log(`\n📦 Génération AVIF (${sizes.length} taille${sizes.length > 1 ? 's' : ''}) :`);
 
-        // 🆕 V14.1 : Traitement SÉQUENTIEL pour économiser la RAM
+        // 🆕 V14.2 : Traitement SÉQUENTIEL avec nettoyage agressif
         const imageResults = [];
         for (const size of sizes) {
             try {
-                const buffer = await sharp(inputBuffer)
+                // Créer une nouvelle instance Sharp pour chaque taille
+                const sharpInstance = sharp(inputBuffer, { limitInputPixels: false });
+                
+                const buffer = await sharpInstance
                     .resize({ width: size.width, withoutEnlargement: true })
                     .toFormat('avif', { 
                         quality: size.quality, 
@@ -218,10 +256,13 @@ app.post('/process', (req, res, next) => {
                 
                 const sizeKo = (buffer.length / 1024).toFixed(1);
                 console.log(`   ${size.name}: ${size.width}px @ Q${size.quality} → ${sizeKo} Ko`);
+                
+                // Stocker le résultat
                 imageResults.push({ type: 'image', size: size.name, data: buffer.toString('base64') });
                 
-                // Libérer la mémoire
-                if (global.gc) global.gc();
+                // 🧹 Nettoyage explicite
+                sharpInstance.destroy();  // Détruire l'instance Sharp
+                
             } catch (err) {
                 console.error(`   ❌ Erreur ${size.name}:`, err.message);
             }
@@ -278,12 +319,28 @@ app.post('/process', (req, res, next) => {
         console.log(`\n✅ Terminé !`);
         console.log(`   ${generatedCount} AVIF générés`);
         console.log(`   Réduction moyenne : ${reduction}%`);
+        
+        // 🆕 V14.2 : Nettoyage mémoire
+        inputBuffer = null;  // Libérer le buffer d'entrée
+        
+        // Forcer le garbage collector si disponible
+        if (global.gc) {
+            global.gc();
+            console.log(`   🧹 GC forcé`);
+        }
+        
+        const memAfter = process.memoryUsage();
+        console.log(`   📊 RAM: ${Math.round(memAfter.heapUsed / 1024 / 1024)} Mo`);
         console.log(`${'─'.repeat(50)}\n`);
         
         res.json(responseData);
 
     } catch (error) {
         console.error("❌ Erreur:", error.message);
+        
+        // Nettoyage même en cas d'erreur
+        if (global.gc) global.gc();
+        
         res.status(500).json({ error: error.message });
     }
 });
@@ -347,4 +404,4 @@ app.post('/seo', upload.single('image'), async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🏭 Usine V14.1 démarrée sur le port ${PORT}`));
+app.listen(PORT, () => console.log(`🏭 Usine V14.2 démarrée sur le port ${PORT} (cache Sharp: OFF, concurrency: 1)`));
