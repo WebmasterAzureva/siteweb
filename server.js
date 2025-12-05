@@ -26,64 +26,132 @@ let requestCount = 0;
 // 🆕 V15.3 : Taille max avant pré-compression (plus souple avec 2 Go)
 const MAX_INPUT_SIZE = 5000;  // 5000px au lieu de 3000px
 
-// QUALITÉS PAR DÉFAUT
+// 🆕 V15.5 : Système de ciblage automatique du poids
+// Fourchettes de poids idéales par taille (en Ko)
+const TARGET_WEIGHTS = {
+    mobile:  { min: 20,  max: 50,  target: 35 },   // 480px
+    tablet:  { min: 40,  max: 90,  target: 65 },   // 768px
+    desktop: { min: 80,  max: 180, target: 130 },  // 1280px
+    large:   { min: 150, max: 350, target: 250 }   // 1920px
+};
+
+// Qualités de départ (point de départ pour l'optimisation)
 const DEFAULT_QUALITIES = {
-    mobile: 70,
-    tablet: 65,
-    desktop: 60,
-    large: 55
+    mobile: 60,
+    tablet: 55,
+    desktop: 50,
+    large: 45
 };
 
 // ==============================================================================
-// 🧠 DÉTECTION INTELLIGENTE DE LA QUALITÉ SOURCE
+// 🆕 V15.5 : GÉNÉRATION AVIF AVEC CIBLAGE AUTOMATIQUE DU POIDS
+// ==============================================================================
+async function generateAvifWithTargetWeight(inputBuffer, width, sizeName, initialQuality, targetWeight) {
+    const { min, max, target } = targetWeight;
+    
+    let quality = initialQuality;
+    let bestBuffer = null;
+    let bestQuality = quality;
+    let attempts = 0;
+    const maxAttempts = 4;
+    
+    // Première génération
+    let buffer = await sharp(inputBuffer)
+        .resize({ width, withoutEnlargement: true })
+        .avif({ quality, effort: 4 })
+        .toBuffer();
+    
+    let sizeKo = buffer.length / 1024;
+    bestBuffer = buffer;
+    bestQuality = quality;
+    attempts++;
+    
+    // Si déjà dans la fourchette, on a fini
+    if (sizeKo >= min && sizeKo <= max) {
+        return { buffer, quality, sizeKo, attempts, status: 'OK' };
+    }
+    
+    // Sinon, on ajuste
+    while (attempts < maxAttempts) {
+        if (sizeKo > max) {
+            // Trop lourd → réduire la qualité
+            const ratio = target / sizeKo;
+            quality = Math.max(20, Math.round(quality * Math.sqrt(ratio)));
+        } else if (sizeKo < min) {
+            // Trop léger → augmenter la qualité (mais pas trop, c'est OK d'être léger)
+            const ratio = target / sizeKo;
+            quality = Math.min(85, Math.round(quality * Math.sqrt(ratio)));
+        }
+        
+        // Éviter de refaire la même qualité
+        if (quality === bestQuality) break;
+        
+        buffer = await sharp(inputBuffer)
+            .resize({ width, withoutEnlargement: true })
+            .avif({ quality, effort: 4 })
+            .toBuffer();
+        
+        sizeKo = buffer.length / 1024;
+        attempts++;
+        
+        // Garder le meilleur résultat (le plus proche de la fourchette)
+        if (sizeKo >= min && sizeKo <= max) {
+            return { buffer, quality, sizeKo, attempts, status: 'OK' };
+        }
+        
+        // Si on est plus proche de la cible, garder ce résultat
+        const currentDistance = Math.abs(sizeKo - target);
+        const bestDistance = Math.abs(bestBuffer.length / 1024 - target);
+        if (currentDistance < bestDistance) {
+            bestBuffer = buffer;
+            bestQuality = quality;
+        }
+    }
+    
+    // Retourner le meilleur résultat trouvé
+    const finalSizeKo = bestBuffer.length / 1024;
+    const status = finalSizeKo > max ? 'HEAVY' : (finalSizeKo < min ? 'LIGHT' : 'OK');
+    return { buffer: bestBuffer, quality: bestQuality, sizeKo: finalSizeKo, attempts, status };
+}
+
+// ==============================================================================
+// 🧠 DÉTECTION INTELLIGENTE DE LA QUALITÉ SOURCE (gardé pour les logs)
 // ==============================================================================
 function analyzeSourceQuality(fileSize, width, height) {
     const pixels = width * height;
     const bytesPerPixel = fileSize / pixels;
     
-    let qualityBonus = 0;
     let qualityLevel = '';
     
     if (bytesPerPixel >= 0.5) {
         qualityLevel = '🟢 Excellente';
-        qualityBonus = 0;
     } else if (bytesPerPixel >= 0.2) {
         qualityLevel = '🟢 Bonne';
-        qualityBonus = 0;
     } else if (bytesPerPixel >= 0.1) {
         qualityLevel = '🟡 Moyenne';
-        qualityBonus = 10;
     } else if (bytesPerPixel >= 0.05) {
         qualityLevel = '🟠 Faible';
-        qualityBonus = 15;
     } else {
         qualityLevel = '🔴 Très faible';
-        qualityBonus = 20;
     }
     
     return {
         pixels,
         bytesPerPixel: bytesPerPixel.toFixed(3),
-        qualityLevel,
-        qualityBonus
+        qualityLevel
     };
-}
-
-// Applique le bonus sans dépasser 95
-function applyQualityBonus(baseQuality, bonus) {
-    return Math.min(95, baseQuality + bonus);
 }
 
 app.get('/', (req, res) => {
     const mem = process.memoryUsage();
-    res.send(`🏭 Usine V15.3 (2 Go) - RAM: ${Math.round(mem.heapUsed / 1024 / 1024)} Mo | Requêtes: ${requestCount}`);
+    res.send(`🏭 Usine V15.5 (2 Go) - RAM: ${Math.round(mem.heapUsed / 1024 / 1024)} Mo | Requêtes: ${requestCount}`);
 });
 
 // Route de monitoring détaillé
 app.get('/health', (req, res) => {
     const mem = process.memoryUsage();
     res.json({
-        version: '15.3',
+        version: '15.5',
         plan: 'Standard 2GB',
         status: 'ok',
         requests: requestCount,
@@ -106,7 +174,8 @@ app.post('/process', (req, res, next) => {
     { name: 'qualities', maxCount: 1 },
     { name: 'sizes', maxCount: 1 },
     { name: 'originalOnly', maxCount: 1 },
-    { name: 'skipGemini', maxCount: 1 }  // 🆕 Option pour skip le SEO
+    { name: 'skipGemini', maxCount: 1 },
+    { name: 'autoWeight', maxCount: 1 }  // 🆕 V15.5 : Mode ciblage auto du poids
 ]), async (req, res) => {
     
     // 1. SÉCURITÉ
@@ -135,11 +204,11 @@ app.post('/process', (req, res, next) => {
         console.log(`📁 Image : ${imageFile.originalname}`);
         console.log(`   Poids original : ${(imageFile.size / 1024).toFixed(1)} Ko`);
         
-        // 🆕 V15.3 : Pré-compression uniquement si > 5000px (2 Go RAM permet plus)
+        // 🆕 V15.4 : Pré-compression en JPEG (pas PNG !) si > 5000px
         const preInfo = await sharp(inputBuffer).metadata();
         
         if (preInfo.width > MAX_INPUT_SIZE || preInfo.height > MAX_INPUT_SIZE) {
-            console.log(`   ⚠️ Image très grande (${preInfo.width}x${preInfo.height}), pré-compression...`);
+            console.log(`   ⚠️ Image très grande (${preInfo.width}x${preInfo.height}), redimensionnement...`);
             
             const preCompressed = await sharp(inputBuffer)
                 .resize({ 
@@ -148,13 +217,13 @@ app.post('/process', (req, res, next) => {
                     fit: 'inside',
                     withoutEnlargement: true 
                 })
-                .png({ quality: 95, compressionLevel: 1 })
+                .jpeg({ quality: 92 })  // 🆕 JPEG au lieu de PNG !
                 .toBuffer();
+            
+            console.log(`   ✅ Réduit : ${(imageFile.size / 1024).toFixed(0)} Ko → ${(preCompressed.length / 1024).toFixed(0)} Ko (${preInfo.width}x${preInfo.height} → max ${MAX_INPUT_SIZE}px)`);
             
             inputBuffer = null;
             inputBuffer = preCompressed;
-            
-            console.log(`   ✅ Réduit à ${(preCompressed.length / 1024).toFixed(1)} Ko`);
         }
         
         // 3. ANALYSER L'IMAGE SOURCE
@@ -264,29 +333,58 @@ app.post('/process', (req, res, next) => {
 
         console.log(`\n📦 Génération AVIF (${sizes.length} taille${sizes.length > 1 ? 's' : ''}) :`);
 
-        // 🆕 V14.2 : Traitement SÉQUENTIEL avec nettoyage agressif
+        // 🆕 V15.5 : Mode automatique de ciblage du poids
+        const autoWeight = req.body && req.body.autoWeight === '1';
+        
+        if (autoWeight) {
+            console.log(`   🎯 Mode AUTO : ciblage poids optimal`);
+        }
+
         const imageResults = [];
+        let totalAvifSize = 0;
+        
         for (const size of sizes) {
             try {
-                // Créer une nouvelle instance Sharp pour chaque taille
-                const sharpInstance = sharp(inputBuffer, { limitInputPixels: false });
+                let buffer, finalQuality, sizeKo, status, attempts;
                 
-                const buffer = await sharpInstance
-                    .resize({ width: size.width, withoutEnlargement: true })
-                    .toFormat('avif', { 
-                        quality: size.quality, 
-                        effort: 3
-                    })
-                    .toBuffer();
+                if (autoWeight && TARGET_WEIGHTS[size.name]) {
+                    // 🆕 Mode AUTO : cibler le poids idéal
+                    const result = await generateAvifWithTargetWeight(
+                        inputBuffer, 
+                        size.width, 
+                        size.name, 
+                        size.quality, 
+                        TARGET_WEIGHTS[size.name]
+                    );
+                    
+                    buffer = result.buffer;
+                    finalQuality = result.quality;
+                    sizeKo = result.sizeKo;
+                    status = result.status;
+                    attempts = result.attempts;
+                    
+                    const target = TARGET_WEIGHTS[size.name];
+                    const statusIcon = status === 'OK' ? '✅' : (status === 'HEAVY' ? '⚠️' : '💡');
+                    console.log(`   ${size.name}: ${size.width}px → ${sizeKo.toFixed(0)} Ko (Q${finalQuality}) ${statusIcon} [${target.min}-${target.max}Ko] (${attempts} essai${attempts > 1 ? 's' : ''})`);
+                    
+                } else {
+                    // Mode classique : qualité fixe
+                    const sharpInstance = sharp(inputBuffer, { limitInputPixels: false });
+                    
+                    buffer = await sharpInstance
+                        .resize({ width: size.width, withoutEnlargement: true })
+                        .avif({ quality: size.quality, effort: 4 })
+                        .toBuffer();
+                    
+                    sizeKo = buffer.length / 1024;
+                    finalQuality = size.quality;
+                    console.log(`   ${size.name}: ${size.width}px @ Q${size.quality} → ${sizeKo.toFixed(0)} Ko`);
+                    
+                    sharpInstance.destroy();
+                }
                 
-                const sizeKo = (buffer.length / 1024).toFixed(1);
-                console.log(`   ${size.name}: ${size.width}px @ Q${size.quality} → ${sizeKo} Ko`);
-                
-                // Stocker le résultat
+                totalAvifSize += buffer.length;
                 imageResults.push({ type: 'image', size: size.name, data: buffer.toString('base64') });
-                
-                // 🧹 Nettoyage explicite
-                sharpInstance.destroy();  // Détruire l'instance Sharp
                 
             } catch (err) {
                 console.error(`   ❌ Erreur ${size.name}:`, err.message);
@@ -335,15 +433,13 @@ app.post('/process', (req, res, next) => {
 
         // Stats
         const generatedCount = Object.keys(responseData.images).length;
-        const totalAvifSize = Object.values(responseData.images).reduce((acc, b64) => {
-            return acc + Buffer.from(b64, 'base64').length;
-        }, 0);
         const avgSize = generatedCount > 0 ? totalAvifSize / generatedCount : 0;
-        const reduction = ((1 - avgSize / imageFile.size) * 100).toFixed(0);
+        const reduction = ((1 - totalAvifSize / imageFile.size) * 100).toFixed(0);
         
         console.log(`\n✅ Terminé !`);
         console.log(`   ${generatedCount} AVIF générés`);
-        console.log(`   Réduction moyenne : ${reduction}%`);
+        console.log(`   Poids total : ${(totalAvifSize / 1024).toFixed(0)} Ko`);
+        console.log(`   Réduction vs original : ${reduction}%`);
         
         // 🆕 V14.2 : Nettoyage mémoire
         inputBuffer = null;  // Libérer le buffer d'entrée
@@ -608,4 +704,4 @@ LANGUE : Français uniquement.`;
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🏭 Usine V15.3 (Standard 2 Go) démarrée sur le port ${PORT}`));
+app.listen(PORT, () => console.log(`🏭 Usine V15.5 (Standard 2 Go) démarrée sur le port ${PORT}`));
