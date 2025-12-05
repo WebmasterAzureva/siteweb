@@ -26,21 +26,33 @@ let requestCount = 0;
 // 🆕 V15.3 : Taille max avant pré-compression (plus souple avec 2 Go)
 const MAX_INPUT_SIZE = 5000;  // 5000px au lieu de 3000px
 
-// 🆕 V15.5 : Système de ciblage automatique du poids
-// Fourchettes de poids idéales par taille (en Ko)
-const TARGET_WEIGHTS = {
-    mobile:  { min: 20,  max: 50,  target: 35 },   // 480px
-    tablet:  { min: 40,  max: 90,  target: 65 },   // 768px
-    desktop: { min: 80,  max: 180, target: 130 },  // 1280px
-    large:   { min: 150, max: 350, target: 250 }   // 1920px
+// 🆕 V15.6 : Tailles optimisées pour Retina (base × 2)
+// 480 (mobile 1x) → 960 (mobile 2x / tablet 1x)
+// 960 → 1536 (tablet 2x) → 2048 (desktop ~1.5x) → 2560 (desktop 2x)
+const DEFAULT_SIZES = {
+    small: 480,     // Mobile 1x
+    medium: 960,    // Mobile 2x, Tablet 1x
+    large: 1536,    // Tablet 2x, Desktop 1x
+    xlarge: 2048,   // Desktop 1.5x
+    retina: 2560    // Desktop 2x, 4K
 };
 
-// Qualités de départ (point de départ pour l'optimisation)
+// 🆕 V15.6 : Cibles de poids ajustées aux nouvelles tailles
+const TARGET_WEIGHTS = {
+    small:  { min: 20,  max: 50,  target: 35 },    // 480px
+    medium: { min: 40,  max: 100, target: 70 },    // 960px
+    large:  { min: 80,  max: 180, target: 130 },   // 1536px
+    xlarge: { min: 120, max: 280, target: 200 },   // 2048px
+    retina: { min: 180, max: 400, target: 300 }    // 2560px
+};
+
+// Qualités de départ (point de départ pour l'optimisation auto)
 const DEFAULT_QUALITIES = {
-    mobile: 60,
-    tablet: 55,
-    desktop: 50,
-    large: 45
+    small: 60,
+    medium: 55,
+    large: 50,
+    xlarge: 45,
+    retina: 42
 };
 
 // ==============================================================================
@@ -144,14 +156,14 @@ function analyzeSourceQuality(fileSize, width, height) {
 
 app.get('/', (req, res) => {
     const mem = process.memoryUsage();
-    res.send(`🏭 Usine V15.5 (2 Go) - RAM: ${Math.round(mem.heapUsed / 1024 / 1024)} Mo | Requêtes: ${requestCount}`);
+    res.send(`🏭 Usine V15.6 (Retina-ready) - RAM: ${Math.round(mem.heapUsed / 1024 / 1024)} Mo | Requêtes: ${requestCount}`);
 });
 
 // Route de monitoring détaillé
 app.get('/health', (req, res) => {
     const mem = process.memoryUsage();
     res.json({
-        version: '15.5',
+        version: '15.6',
         plan: 'Standard 2GB',
         status: 'ok',
         requests: requestCount,
@@ -278,18 +290,13 @@ app.post('/process', (req, res, next) => {
         let sizes = [];
         
         if (originalOnly) {
-            // 🆕 Mode "taille originale uniquement" : une seule image à la taille source
-            const quality = finalQualities.original || finalQualities.large || 65;
+            // Mode "taille originale uniquement" : une seule image à la taille source
+            const quality = finalQualities.original || finalQualities.retina || 50;
             sizes = [{ name: 'original', width: imageInfo.width, quality }];
             console.log(`\n📷 Mode ORIGINAL ONLY : ${imageInfo.width}px @ Q${quality}`);
         } else {
-            // Mode responsive : plusieurs tailles
-            let configuredSizes = {
-                mobile: 480,
-                tablet: 768,
-                desktop: 1280,
-                large: 1920
-            };
+            // 🆕 V15.6 : Tailles Retina-ready par défaut
+            let configuredSizes = { ...DEFAULT_SIZES };
             
             // Récupérer les tailles envoyées par WordPress
             if (req.body && req.body.sizes) {
@@ -297,7 +304,7 @@ app.post('/process', (req, res, next) => {
                     const customSizes = JSON.parse(req.body.sizes);
                     configuredSizes = {};
                     for (const [name, width] of Object.entries(customSizes)) {
-                        if (name !== 'original') { // Ignorer "original" des tailles configurées
+                        if (name !== 'original') {
                             configuredSizes[name] = parseInt(width);
                         }
                     }
@@ -311,7 +318,7 @@ app.post('/process', (req, res, next) => {
             const allSizes = Object.entries(configuredSizes).map(([name, width]) => ({
                 name,
                 width,
-                quality: finalQualities[name] || 60
+                quality: finalQualities[name] || 50
             })).sort((a, b) => a.width - b.width);
             
             // Filtrer : garder seulement les tailles ≤ largeur originale
@@ -325,7 +332,7 @@ app.post('/process', (req, res, next) => {
             
             // Ajouter une taille "originale" si l'image ne correspond à aucun breakpoint exact
             const maxFilteredWidth = sizes.length > 0 ? Math.max(...sizes.map(s => s.width)) : 0;
-            const maxConfiguredWidth = Object.values(configuredSizes).length > 0 ? Math.max(...Object.values(configuredSizes)) : 1920;
+            const maxConfiguredWidth = Object.values(configuredSizes).length > 0 ? Math.max(...Object.values(configuredSizes)) : 2560;
             if (imageInfo.width > maxFilteredWidth && imageInfo.width < maxConfiguredWidth) {
                 sizes.push({ name: 'original', width: imageInfo.width, quality: finalQualities.large || 55 });
             }
@@ -704,4 +711,4 @@ LANGUE : Français uniquement.`;
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🏭 Usine V15.5 (Standard 2 Go) démarrée sur le port ${PORT}`));
+app.listen(PORT, () => console.log(`🏭 Usine V15.6 (Retina-ready) démarrée sur le port ${PORT}`));
