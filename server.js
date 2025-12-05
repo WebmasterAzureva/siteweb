@@ -74,14 +74,14 @@ function applyQualityBonus(baseQuality, bonus) {
 
 app.get('/', (req, res) => {
     const mem = process.memoryUsage();
-    res.send(`🏭 Usine V15.0 - RAM: ${Math.round(mem.heapUsed / 1024 / 1024)} Mo | Requêtes: ${requestCount}`);
+    res.send(`🏭 Usine V15.1 - RAM: ${Math.round(mem.heapUsed / 1024 / 1024)} Mo | Requêtes: ${requestCount}`);
 });
 
 // Route de monitoring détaillé
 app.get('/health', (req, res) => {
     const mem = process.memoryUsage();
     res.json({
-        version: '15.0',
+        version: '15.1',
         status: 'ok',
         requests: requestCount,
         memory: {
@@ -424,19 +424,30 @@ app.post('/seo', upload.fields([
         }
         
         // Parser les catégories thématiques
-        // Format : "CATÉGORIE: mot1, mot2, mot3" (une par ligne)
+        // Format : "CATÉGORIE: mot1, mot2" (UN SEUL mot choisi)
+        // Format : "CATÉGORIE*: mot1, mot2" (TOUS les mots pertinents)
         const categories = [];
         if (categoriesRaw) {
             const lines = categoriesRaw.split('\n').filter(l => l.trim() && l.includes(':'));
             for (const line of lines) {
                 const colonIndex = line.indexOf(':');
-                const catName = line.substring(0, colonIndex).trim();
+                let catName = line.substring(0, colonIndex).trim();
                 const keywords = line.substring(colonIndex + 1).split(',').map(k => k.trim()).filter(Boolean);
+                
+                // Détecter le mode multi-sélection (étoile *)
+                const isMulti = catName.endsWith('*');
+                if (isMulti) {
+                    catName = catName.slice(0, -1).trim();  // Retirer l'étoile
+                }
+                
                 if (catName && keywords.length > 0) {
-                    categories.push({ name: catName, keywords });
+                    categories.push({ name: catName, keywords, multi: isMulti });
                 }
             }
-            console.log(`   🏷️ Catégories : ${categories.length} configurées`);
+            
+            const singleCats = categories.filter(c => !c.multi).length;
+            const multiCats = categories.filter(c => c.multi).length;
+            console.log(`   🏷️ Catégories : ${singleCats} simple(s), ${multiCats} multi(*)`);
         }
         
         const genAI = new GoogleGenerativeAI(API_KEY_GEMINI);
@@ -494,40 +505,80 @@ Réponds UNIQUEMENT avec ce JSON :
         // =================================================================
         // ÉTAPE 2 : Sélection des mots-clés par catégorie
         // =================================================================
-        const selectedKeywords = {};
+        const selectedKeywords = {};  // Pour les catégories simples : string
+                                      // Pour les catégories multi : array
         
         if (categories.length > 0 && imageIsRelevant) {
             console.log(`\n🏷️ Étape 2 : Sélection des mots-clés...`);
             
-            // Construire la liste des catégories pour Gemini
-            let categoriesPrompt = `Analyse cette image et pour chaque catégorie, choisis LE MOT LE PLUS PERTINENT parmi les options proposées.
-Si aucun mot n'est pertinent pour une catégorie, réponds "null" pour cette catégorie.
-
-CATÉGORIES :\n`;
+            // Séparer les catégories simples et multi
+            const singleCats = categories.filter(c => !c.multi);
+            const multiCats = categories.filter(c => c.multi);
             
-            for (const cat of categories) {
-                categoriesPrompt += `${cat.name}: ${cat.keywords.join(', ')}\n`;
+            // Construire le prompt pour Gemini
+            let categoriesPrompt = `Analyse cette image et sélectionne les mots-clés pertinents.
+
+`;
+            
+            if (singleCats.length > 0) {
+                categoriesPrompt += `CATÉGORIES SIMPLES (choisis UN SEUL mot par catégorie, ou null si aucun n'est pertinent) :\n`;
+                for (const cat of singleCats) {
+                    categoriesPrompt += `${cat.name}: ${cat.keywords.join(', ')}\n`;
+                }
+                categoriesPrompt += `\n`;
             }
             
-            categoriesPrompt += `\nRéponds UNIQUEMENT avec un JSON où chaque clé est le nom de la catégorie et la valeur est le mot choisi (ou null) :
+            if (multiCats.length > 0) {
+                categoriesPrompt += `CATÉGORIES MULTIPLES (choisis TOUS les mots visibles/pertinents, ou tableau vide si aucun) :\n`;
+                for (const cat of multiCats) {
+                    categoriesPrompt += `${cat.name}: ${cat.keywords.join(', ')}\n`;
+                }
+                categoriesPrompt += `\n`;
+            }
+            
+            categoriesPrompt += `Réponds UNIQUEMENT avec un JSON valide :
 {
-${categories.map(c => `  "${c.name}": "mot choisi ou null"`).join(',\n')}
-}`;
+${singleCats.map(c => `  "${c.name}": "mot choisi ou null"`).join(',\n')}${singleCats.length > 0 && multiCats.length > 0 ? ',' : ''}
+${multiCats.map(c => `  "${c.name}": ["mot1", "mot2"] ou []`).join(',\n')}
+}
+
+IMPORTANT : Pour les catégories multiples, retourne un TABLEAU avec tous les mots pertinents visibles dans l'image.`;
 
             try {
                 const keywordsResult = await model.generateContent([categoriesPrompt, imageData]);
                 const keywordsText = keywordsResult.response.text().replace(/```json|```/g, '').trim();
                 const keywordsData = JSON.parse(keywordsText);
                 
-                for (const cat of categories) {
+                // Traiter les catégories simples
+                for (const cat of singleCats) {
                     const chosen = keywordsData[cat.name];
                     if (chosen && chosen !== 'null' && chosen !== null) {
-                        // Vérifier que le mot fait bien partie des options
                         const normalizedChosen = chosen.toLowerCase().trim();
                         const matchedKeyword = cat.keywords.find(k => k.toLowerCase().trim() === normalizedChosen);
                         if (matchedKeyword) {
                             selectedKeywords[cat.name] = matchedKeyword;
                             console.log(`   ${cat.name}: "${matchedKeyword}"`);
+                        }
+                    }
+                }
+                
+                // Traiter les catégories multi
+                for (const cat of multiCats) {
+                    const chosenArray = keywordsData[cat.name];
+                    if (Array.isArray(chosenArray) && chosenArray.length > 0) {
+                        const matchedKeywords = [];
+                        for (const chosen of chosenArray) {
+                            if (chosen && chosen !== 'null' && chosen !== null) {
+                                const normalizedChosen = chosen.toLowerCase().trim();
+                                const matchedKeyword = cat.keywords.find(k => k.toLowerCase().trim() === normalizedChosen);
+                                if (matchedKeyword && !matchedKeywords.includes(matchedKeyword)) {
+                                    matchedKeywords.push(matchedKeyword);
+                                }
+                            }
+                        }
+                        if (matchedKeywords.length > 0) {
+                            selectedKeywords[cat.name] = matchedKeywords;
+                            console.log(`   ${cat.name}*: ${matchedKeywords.map(k => `"${k}"`).join(', ')}`);
                         }
                     }
                 }
@@ -568,10 +619,18 @@ RÈGLES POUR LA MARQUE :
 `;
         }
         
-        // Mots-clés sélectionnés
-        const keywordsList = Object.values(selectedKeywords);
+        // Mots-clés sélectionnés (aplatir les tableaux pour les catégories multi)
+        const keywordsList = [];
+        for (const value of Object.values(selectedKeywords)) {
+            if (Array.isArray(value)) {
+                keywordsList.push(...value);
+            } else {
+                keywordsList.push(value);
+            }
+        }
+        
         if (keywordsList.length > 0) {
-            seoPrompt += `MOTS-CLÉS À INTÉGRER (naturellement, si pertinent) :
+            seoPrompt += `MOTS-CLÉS À INTÉGRER (naturellement) :
 ${keywordsList.join(', ')}
 
 `;
@@ -600,13 +659,27 @@ IMPORTANT : Réponds UNIQUEMENT avec le JSON, sans commentaire.`;
         console.log(`   🖼️ Alt : ${seoData.alt?.substring(0, 60)}...`);
         console.log(`   📝 Desc : ${seoData.description?.substring(0, 60)}...`);
         console.log(`   🏢 Marque appliquée : ${applyBrand ? 'Oui' : 'Non'}`);
+        if (keywordsList.length > 0) {
+            console.log(`   🏷️ Mots-clés : ${keywordsList.join(', ')}`);
+        }
         console.log("─".repeat(60) + "\n");
+        
+        // Formater les catégories utilisées
+        const categoriesUsed = [];
+        for (const [cat, kw] of Object.entries(selectedKeywords)) {
+            if (Array.isArray(kw)) {
+                categoriesUsed.push(`${cat}*:${kw.join(',')}`);
+            } else {
+                categoriesUsed.push(`${cat}:${kw}`);
+            }
+        }
         
         res.json({ 
             seo: seoData,
             brandApplied: applyBrand,
             imageRelevant: imageIsRelevant,
-            categoriesUsed: Object.entries(selectedKeywords).map(([cat, kw]) => `${cat}:${kw}`)
+            keywordsUsed: keywordsList,
+            categoriesUsed: categoriesUsed
         });
         
     } catch (error) {
@@ -616,4 +689,4 @@ IMPORTANT : Réponds UNIQUEMENT avec le JSON, sans commentaire.`;
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🏭 Usine V15.0 démarrée sur le port ${PORT}`));
+app.listen(PORT, () => console.log(`🏭 Usine V15.1 démarrée sur le port ${PORT}`));
