@@ -65,9 +65,17 @@ async function generateAvifWithTargetWeight(inputBuffer, width, sizeName, initia
     let attempts = 0;
     const maxAttempts = 4;
     
+    // 🆕 V15.9 : Resize basé sur la plus grande dimension (pour images portrait)
+    const resizeOptions = { 
+        width, 
+        height: width, 
+        fit: 'inside', 
+        withoutEnlargement: true 
+    };
+    
     // Première génération
     let buffer = await sharp(inputBuffer)
-        .resize({ width, withoutEnlargement: true })
+        .resize(resizeOptions)
         .avif({ quality, effort: 4 })
         .toBuffer();
     
@@ -97,7 +105,7 @@ async function generateAvifWithTargetWeight(inputBuffer, width, sizeName, initia
         if (quality === bestQuality) break;
         
         buffer = await sharp(inputBuffer)
-            .resize({ width, withoutEnlargement: true })
+            .resize(resizeOptions)
             .avif({ quality, effort: 4 })
             .toBuffer();
         
@@ -154,14 +162,14 @@ function analyzeSourceQuality(fileSize, width, height) {
 
 app.get('/', (req, res) => {
     const mem = process.memoryUsage();
-    res.send(`🏭 Usine V15.8 - RAM: ${Math.round(mem.heapUsed / 1024 / 1024)} Mo | Requêtes: ${requestCount}`);
+    res.send(`🏭 Usine V15.9 - RAM: ${Math.round(mem.heapUsed / 1024 / 1024)} Mo | Requêtes: ${requestCount}`);
 });
 
 // Route de monitoring détaillé
 app.get('/health', (req, res) => {
     const mem = process.memoryUsage();
     res.json({
-        version: '15.8',
+        version: '15.9',
         plan: 'Standard 2GB',
         status: 'ok',
         requests: requestCount,
@@ -312,20 +320,28 @@ app.post('/process', (req, res, next) => {
                 quality: finalQualities[name] || 50
             })).sort((a, b) => a.width - b.width);
             
-            // Filtrer : garder seulement les tailles ≤ largeur originale
-            sizes = allSizes.filter(s => s.width <= imageInfo.width);
+            // 🆕 V15.9 : Se baser sur la plus grande dimension (pour les images portrait)
+            const maxDimension = Math.max(imageInfo.width, imageInfo.height);
+            const isPortrait = imageInfo.height > imageInfo.width;
+            
+            if (isPortrait) {
+                console.log(`   📐 Image portrait détectée (${imageInfo.width}×${imageInfo.height})`);
+            }
+            
+            // Filtrer : garder seulement les tailles ≤ plus grande dimension
+            sizes = allSizes.filter(s => s.width <= maxDimension);
             
             // Si l'image est plus petite que la plus petite taille, générer quand même une version
             if (sizes.length === 0 && allSizes.length > 0) {
                 const smallest = allSizes[0];
-                sizes.push({ name: smallest.name, width: imageInfo.width, quality: smallest.quality });
+                sizes.push({ name: smallest.name, width: maxDimension, quality: smallest.quality });
             }
             
             // Ajouter une taille "originale" si l'image ne correspond à aucun breakpoint exact
-            const maxFilteredWidth = sizes.length > 0 ? Math.max(...sizes.map(s => s.width)) : 0;
-            const maxConfiguredWidth = Object.values(configuredSizes).length > 0 ? Math.max(...Object.values(configuredSizes)) : 2560;
-            if (imageInfo.width > maxFilteredWidth && imageInfo.width < maxConfiguredWidth) {
-                sizes.push({ name: 'original', width: imageInfo.width, quality: finalQualities.large || 55 });
+            const maxFilteredSize = sizes.length > 0 ? Math.max(...sizes.map(s => s.width)) : 0;
+            const maxConfiguredSize = Object.values(configuredSizes).length > 0 ? Math.max(...Object.values(configuredSizes)) : 2560;
+            if (maxDimension > maxFilteredSize && maxDimension < maxConfiguredSize) {
+                sizes.push({ name: 'original', width: maxDimension, quality: finalQualities.fullhd || 50 });
             }
         }
 
@@ -369,8 +385,14 @@ app.post('/process', (req, res, next) => {
                     // Mode classique : qualité fixe
                     const sharpInstance = sharp(inputBuffer, { limitInputPixels: false });
                     
+                    // 🆕 V15.9 : Resize basé sur la plus grande dimension (pour images portrait)
                     buffer = await sharpInstance
-                        .resize({ width: size.width, withoutEnlargement: true })
+                        .resize({ 
+                            width: size.width, 
+                            height: size.width, 
+                            fit: 'inside',
+                            withoutEnlargement: true 
+                        })
                         .avif({ quality: size.quality, effort: 4 })
                         .toBuffer();
                     
@@ -702,4 +724,4 @@ LANGUE : Français uniquement.`;
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🏭 Usine V15.8 démarrée sur le port ${PORT}`));
+app.listen(PORT, () => console.log(`🏭 Usine V15.9 démarrée sur le port ${PORT}`));
