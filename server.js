@@ -3,17 +3,17 @@ const multer = require('multer');
 const sharp = require('sharp');
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 
-// 🆕 V14.2 : Configuration Sharp pour éviter les fuites mémoire
-sharp.cache(false);  // Désactiver le cache Sharp
-sharp.concurrency(1);  // Une seule opération à la fois
-sharp.simd(true);  // Utiliser SIMD pour la performance
+// 🆕 V15.3 : Configuration Sharp optimisée pour 2 Go RAM
+sharp.cache(false);  // Désactiver le cache (évite accumulation)
+sharp.concurrency(2);  // 🆕 2 opérations en parallèle (au lieu de 1)
+sharp.simd(true);  // SIMD pour la performance
 
 const app = express();
 
-// Configuration de l'upload (20 Mo max)
+// 🆕 V15.3 : Limite fichier augmentée à 50 Mo
 const upload = multer({ 
     storage: multer.memoryStorage(), 
-    limits: { fileSize: 20 * 1024 * 1024 } 
+    limits: { fileSize: 50 * 1024 * 1024 }  // 50 Mo max
 });
 
 // Variables d'environnement
@@ -23,13 +23,15 @@ const SECRET_TOKEN = process.env.MY_SECRET_TOKEN;
 // Compteur de requêtes pour monitoring mémoire
 let requestCount = 0;
 
-// 🆕 QUALITÉS PAR DÉFAUT INVERSÉES
-// Plus de qualité pour les petites tailles (artefacts plus visibles)
+// 🆕 V15.3 : Taille max avant pré-compression (plus souple avec 2 Go)
+const MAX_INPUT_SIZE = 5000;  // 5000px au lieu de 3000px
+
+// QUALITÉS PAR DÉFAUT
 const DEFAULT_QUALITIES = {
-    mobile: 70,   // ↑ Était 50 - petite image = qualité haute
-    tablet: 65,   // ↑ Était 55
-    desktop: 60,  // = Inchangé
-    large: 55     // ↓ Était 70 - grande image = on peut compresser plus
+    mobile: 70,
+    tablet: 65,
+    desktop: 60,
+    large: 55
 };
 
 // ==============================================================================
@@ -74,14 +76,15 @@ function applyQualityBonus(baseQuality, bonus) {
 
 app.get('/', (req, res) => {
     const mem = process.memoryUsage();
-    res.send(`🏭 Usine V15.1 - RAM: ${Math.round(mem.heapUsed / 1024 / 1024)} Mo | Requêtes: ${requestCount}`);
+    res.send(`🏭 Usine V15.3 (2 Go) - RAM: ${Math.round(mem.heapUsed / 1024 / 1024)} Mo | Requêtes: ${requestCount}`);
 });
 
 // Route de monitoring détaillé
 app.get('/health', (req, res) => {
     const mem = process.memoryUsage();
     res.json({
-        version: '15.1',
+        version: '15.3',
+        plan: 'Standard 2GB',
         status: 'ok',
         requests: requestCount,
         memory: {
@@ -132,13 +135,11 @@ app.post('/process', (req, res, next) => {
         console.log(`📁 Image : ${imageFile.originalname}`);
         console.log(`   Poids original : ${(imageFile.size / 1024).toFixed(1)} Ko`);
         
-        // 🆕 V14.3 : Pré-compression si image trop grande (> 3000px)
-        // Ça réduit drastiquement l'usage mémoire pour les grandes images
-        const MAX_INPUT_SIZE = 3000;
+        // 🆕 V15.3 : Pré-compression uniquement si > 5000px (2 Go RAM permet plus)
         const preInfo = await sharp(inputBuffer).metadata();
         
         if (preInfo.width > MAX_INPUT_SIZE || preInfo.height > MAX_INPUT_SIZE) {
-            console.log(`   ⚠️ Image trop grande (${preInfo.width}x${preInfo.height}), pré-compression...`);
+            console.log(`   ⚠️ Image très grande (${preInfo.width}x${preInfo.height}), pré-compression...`);
             
             const preCompressed = await sharp(inputBuffer)
                 .resize({ 
@@ -147,10 +148,9 @@ app.post('/process', (req, res, next) => {
                     fit: 'inside',
                     withoutEnlargement: true 
                 })
-                .png({ quality: 95, compressionLevel: 1 })  // PNG rapide, quasi sans perte
+                .png({ quality: 95, compressionLevel: 1 })
                 .toBuffer();
             
-            // Libérer l'ancien buffer
             inputBuffer = null;
             inputBuffer = preCompressed;
             
@@ -374,7 +374,7 @@ app.post('/process', (req, res, next) => {
 // 🆕 ROUTE SEO UNIQUEMENT (Gemini)
 // ==============================================================================
 // ==============================================================================
-// 🆕 V15.0 : ROUTE SEO UNIVERSELLE
+// 🆕 V15.2 : ROUTE SEO UNIVERSELLE - 1 SEUL APPEL GEMINI
 // ==============================================================================
 app.post('/seo', upload.fields([
     { name: 'image', maxCount: 1 },
@@ -385,7 +385,7 @@ app.post('/seo', upload.fields([
     { name: 'categories', maxCount: 1 }
 ]), async (req, res) => {
     console.log("\n" + "═".repeat(60));
-    console.log("📨 REQUÊTE SEO UNIVERSELLE");
+    console.log("📨 REQUÊTE SEO (V15.2 - 1 appel)");
     console.log("═".repeat(60));
     
     try {
@@ -414,18 +414,7 @@ app.post('/seo', upload.fields([
         const brandConditional = req.body?.brandConditional === '1';
         const categoriesRaw = req.body?.categories || '';
         
-        console.log(`\n⚙️ Configuration :`);
-        if (brandName) {
-            console.log(`   🏢 Marque : ${brandName}`);
-            console.log(`   📋 Secteur : ${brandSector ? brandSector.substring(0, 50) + '...' : '(non défini)'}`);
-            console.log(`   🎯 Application : ${brandConditional ? 'Intelligente (si pertinent)' : 'Systématique'}`);
-        } else {
-            console.log(`   🏢 Marque : (aucune)`);
-        }
-        
         // Parser les catégories thématiques
-        // Format : "CATÉGORIE: mot1, mot2" (UN SEUL mot choisi)
-        // Format : "CATÉGORIE*: mot1, mot2" (TOUS les mots pertinents)
         const categories = [];
         if (categoriesRaw) {
             const lines = categoriesRaw.split('\n').filter(l => l.trim() && l.includes(':'));
@@ -434,21 +423,18 @@ app.post('/seo', upload.fields([
                 let catName = line.substring(0, colonIndex).trim();
                 const keywords = line.substring(colonIndex + 1).split(',').map(k => k.trim()).filter(Boolean);
                 
-                // Détecter le mode multi-sélection (étoile *)
                 const isMulti = catName.endsWith('*');
                 if (isMulti) {
-                    catName = catName.slice(0, -1).trim();  // Retirer l'étoile
+                    catName = catName.slice(0, -1).trim();
                 }
                 
                 if (catName && keywords.length > 0) {
                     categories.push({ name: catName, keywords, multi: isMulti });
                 }
             }
-            
-            const singleCats = categories.filter(c => !c.multi).length;
-            const multiCats = categories.filter(c => c.multi).length;
-            console.log(`   🏷️ Catégories : ${singleCats} simple(s), ${multiCats} multi(*)`);
         }
+        
+        console.log(`⚙️ Config : Marque=${brandName || '(aucune)'} | Catégories=${categories.length}`);
         
         const genAI = new GoogleGenerativeAI(API_KEY_GEMINI);
         const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
@@ -462,203 +448,136 @@ app.post('/seo', upload.fields([
         const imageData = { inlineData: { data: compressedBuffer.toString('base64'), mimeType: 'image/jpeg' } };
         
         // =================================================================
-        // ÉTAPE 1 : Analyse de l'image et détection de pertinence
+        // CONSTRUIRE LE PROMPT UNIQUE (tout en 1 seul appel)
         // =================================================================
-        let imageIsRelevant = true;  // Par défaut, on considère l'image pertinente
-        let imageAnalysis = null;
-        
-        if (brandConditional && brandSector) {
-            console.log(`\n🔍 Étape 1 : Analyse de pertinence...`);
-            
-            const analysisPrompt = `Analyse cette image et réponds UNIQUEMENT avec un JSON valide.
-
-SECTEUR D'ACTIVITÉ À VÉRIFIER : ${brandSector}
-
-Questions à répondre :
-1. L'image est-elle une photo/illustration liée à ce secteur d'activité ?
-2. Quel est le type d'image ? (photo de produit/service, photo d'ambiance, icône/pictogramme, illustration, logo, capture d'écran, autre)
-
-Réponds UNIQUEMENT avec ce JSON :
-{
-  "isRelevant": true ou false,
-  "imageType": "type d'image",
-  "reason": "explication courte"
-}`;
-
-            try {
-                const analysisResult = await model.generateContent([analysisPrompt, imageData]);
-                const analysisText = analysisResult.response.text().replace(/```json|```/g, '').trim();
-                imageAnalysis = JSON.parse(analysisText);
-                imageIsRelevant = imageAnalysis.isRelevant === true;
-                
-                console.log(`   Type : ${imageAnalysis.imageType}`);
-                console.log(`   Pertinente : ${imageIsRelevant ? '✅ Oui' : '❌ Non'}`);
-                if (!imageIsRelevant) {
-                    console.log(`   Raison : ${imageAnalysis.reason}`);
-                }
-            } catch (e) {
-                console.log(`   ⚠️ Analyse échouée, on considère pertinent par défaut`);
-                imageIsRelevant = true;
-            }
-        }
-        
-        // =================================================================
-        // ÉTAPE 2 : Sélection des mots-clés par catégorie
-        // =================================================================
-        const selectedKeywords = {};  // Pour les catégories simples : string
-                                      // Pour les catégories multi : array
-        
-        if (categories.length > 0 && imageIsRelevant) {
-            console.log(`\n🏷️ Étape 2 : Sélection des mots-clés...`);
-            
-            // Séparer les catégories simples et multi
-            const singleCats = categories.filter(c => !c.multi);
-            const multiCats = categories.filter(c => c.multi);
-            
-            // Construire le prompt pour Gemini
-            let categoriesPrompt = `Analyse cette image et sélectionne les mots-clés pertinents.
-
-`;
-            
-            if (singleCats.length > 0) {
-                categoriesPrompt += `CATÉGORIES SIMPLES (choisis UN SEUL mot par catégorie, ou null si aucun n'est pertinent) :\n`;
-                for (const cat of singleCats) {
-                    categoriesPrompt += `${cat.name}: ${cat.keywords.join(', ')}\n`;
-                }
-                categoriesPrompt += `\n`;
-            }
-            
-            if (multiCats.length > 0) {
-                categoriesPrompt += `CATÉGORIES MULTIPLES (choisis TOUS les mots visibles/pertinents, ou tableau vide si aucun) :\n`;
-                for (const cat of multiCats) {
-                    categoriesPrompt += `${cat.name}: ${cat.keywords.join(', ')}\n`;
-                }
-                categoriesPrompt += `\n`;
-            }
-            
-            categoriesPrompt += `Réponds UNIQUEMENT avec un JSON valide :
-{
-${singleCats.map(c => `  "${c.name}": "mot choisi ou null"`).join(',\n')}${singleCats.length > 0 && multiCats.length > 0 ? ',' : ''}
-${multiCats.map(c => `  "${c.name}": ["mot1", "mot2"] ou []`).join(',\n')}
-}
-
-IMPORTANT : Pour les catégories multiples, retourne un TABLEAU avec tous les mots pertinents visibles dans l'image.`;
-
-            try {
-                const keywordsResult = await model.generateContent([categoriesPrompt, imageData]);
-                const keywordsText = keywordsResult.response.text().replace(/```json|```/g, '').trim();
-                const keywordsData = JSON.parse(keywordsText);
-                
-                // Traiter les catégories simples
-                for (const cat of singleCats) {
-                    const chosen = keywordsData[cat.name];
-                    if (chosen && chosen !== 'null' && chosen !== null) {
-                        const normalizedChosen = chosen.toLowerCase().trim();
-                        const matchedKeyword = cat.keywords.find(k => k.toLowerCase().trim() === normalizedChosen);
-                        if (matchedKeyword) {
-                            selectedKeywords[cat.name] = matchedKeyword;
-                            console.log(`   ${cat.name}: "${matchedKeyword}"`);
-                        }
-                    }
-                }
-                
-                // Traiter les catégories multi
-                for (const cat of multiCats) {
-                    const chosenArray = keywordsData[cat.name];
-                    if (Array.isArray(chosenArray) && chosenArray.length > 0) {
-                        const matchedKeywords = [];
-                        for (const chosen of chosenArray) {
-                            if (chosen && chosen !== 'null' && chosen !== null) {
-                                const normalizedChosen = chosen.toLowerCase().trim();
-                                const matchedKeyword = cat.keywords.find(k => k.toLowerCase().trim() === normalizedChosen);
-                                if (matchedKeyword && !matchedKeywords.includes(matchedKeyword)) {
-                                    matchedKeywords.push(matchedKeyword);
-                                }
-                            }
-                        }
-                        if (matchedKeywords.length > 0) {
-                            selectedKeywords[cat.name] = matchedKeywords;
-                            console.log(`   ${cat.name}*: ${matchedKeywords.map(k => `"${k}"`).join(', ')}`);
-                        }
-                    }
-                }
-                
-                if (Object.keys(selectedKeywords).length === 0) {
-                    console.log(`   (aucun mot-clé sélectionné)`);
-                }
-            } catch (e) {
-                console.log(`   ⚠️ Sélection échouée : ${e.message}`);
-            }
-        }
-        
-        // =================================================================
-        // ÉTAPE 3 : Génération du SEO
-        // =================================================================
-        console.log(`\n✍️ Étape 3 : Génération du SEO...`);
-        
-        let seoPrompt = `Tu es un expert SEO. Génère les métadonnées optimisées pour cette image.
+        let prompt = `Tu es un expert SEO. Analyse cette image et génère les métadonnées optimisées.
 
 `;
         
         // Instructions personnalisées
         if (customPrompt) {
-            seoPrompt += `INSTRUCTIONS DE STYLE :\n${customPrompt}\n\n`;
-        }
-        
-        // Marque (si pertinente ou si mode systématique)
-        const applyBrand = brandName && (imageIsRelevant || !brandConditional);
-        
-        if (applyBrand) {
-            seoPrompt += `MARQUE : ${brandName}
-RÈGLES POUR LA MARQUE :
-- TITRE : Ajoute "${brandName}" à la FIN, séparé par " - " ou " | "
-  Exemple : "Description de l'image - ${brandName}"
-- ALT : NE JAMAIS inclure la marque ! L'alt décrit UNIQUEMENT ce qui est visible.
-- DESCRIPTION : Mentionne "${brandName}" UNE SEULE FOIS, naturellement.
+            prompt += `INSTRUCTIONS DE STYLE : ${customPrompt}
 
 `;
         }
         
-        // Mots-clés sélectionnés (aplatir les tableaux pour les catégories multi)
-        const keywordsList = [];
-        for (const value of Object.values(selectedKeywords)) {
-            if (Array.isArray(value)) {
-                keywordsList.push(...value);
+        // Analyse de pertinence (si mode conditionnel)
+        if (brandConditional && brandSector && brandName) {
+            prompt += `ANALYSE DE PERTINENCE :
+Le secteur d'activité est : "${brandSector}"
+Détermine si cette image est liée à ce secteur (photo de produit, service, ambiance liée au secteur).
+Les icônes, pictogrammes, illustrations génériques ne sont PAS pertinentes.
+
+`;
+        }
+        
+        // Catégories de mots-clés
+        if (categories.length > 0) {
+            prompt += `CATÉGORIES DE MOTS-CLÉS :
+`;
+            for (const cat of categories) {
+                if (cat.multi) {
+                    prompt += `${cat.name} (choisis TOUS les mots visibles, ou tableau vide) : ${cat.keywords.join(', ')}
+`;
+                } else {
+                    prompt += `${cat.name} (choisis UN SEUL mot, ou null) : ${cat.keywords.join(', ')}
+`;
+                }
+            }
+            prompt += `
+`;
+        }
+        
+        // Instructions pour la marque
+        if (brandName) {
+            prompt += `MARQUE : "${brandName}"
+`;
+            if (brandConditional) {
+                prompt += `Si l'image est pertinente avec le secteur :
+- Ajoute "${brandName}" à la FIN du titre (ex: "Description - ${brandName}")
+- Mentionne "${brandName}" UNE FOIS dans la description
+- NE JAMAIS mettre la marque dans l'alt
+
+Si l'image N'EST PAS pertinente : ne mets PAS la marque du tout.
+
+`;
             } else {
-                keywordsList.push(value);
+                prompt += `Ajoute TOUJOURS "${brandName}" à la fin du titre et une fois dans la description.
+NE JAMAIS mettre la marque dans l'alt.
+
+`;
             }
         }
         
-        if (keywordsList.length > 0) {
-            seoPrompt += `MOTS-CLÉS À INTÉGRER (naturellement) :
-${keywordsList.join(', ')}
-
-`;
-        }
-        
         // Format de réponse
-        seoPrompt += `FORMAT DE RÉPONSE (JSON uniquement) :
+        prompt += `RÉPONDS UNIQUEMENT avec ce JSON (pas de commentaire, pas de markdown) :
 {
-  "title": "Titre accrocheur${applyBrand ? ' - ' + brandName : ''} (50-60 caractères max)",
-  "alt": "Description factuelle de ce qui est VISIBLE dans l'image (100-125 caractères, SANS marque)",
-  "description": "Description engageante${applyBrand ? ' mentionnant ' + brandName + ' une fois' : ''} (150-160 caractères)"
+  "isRelevant": ${brandConditional && brandSector ? 'true ou false selon si l\'image est liée au secteur' : 'true'},
+  "keywords": {
+${categories.map(c => `    "${c.name}": ${c.multi ? '["mot1", "mot2"] ou []' : '"mot choisi" ou null'}`).join(',\n')}
+  },
+  "seo": {
+    "title": "Titre accrocheur (50-60 car)${brandName ? ` + " - ${brandName}" si pertinent` : ''}",
+    "alt": "Description factuelle de ce qui est VISIBLE (100-125 car, JAMAIS de marque)",
+    "description": "Description engageante (150-160 car)${brandName ? ` avec ${brandName} si pertinent` : ''}"
+  }
 }
 
-LANGUE : Français uniquement.
-IMPORTANT : Réponds UNIQUEMENT avec le JSON, sans commentaire.`;
+LANGUE : Français uniquement.`;
 
-        const seoResult = await model.generateContent([seoPrompt, imageData]);
-        const seoText = seoResult.response.text().replace(/```json|```/g, '').trim();
-        const seoData = JSON.parse(seoText);
+        console.log(`🤖 Gemini : appel unique en cours...`);
+        
+        const result = await model.generateContent([prompt, imageData]);
+        const text = result.response.text().replace(/```json|```/g, '').trim();
+        
+        let data;
+        try {
+            data = JSON.parse(text);
+        } catch (parseError) {
+            console.error(`❌ Erreur parsing JSON:`, text.substring(0, 200));
+            throw new Error('Réponse Gemini invalide');
+        }
+        
+        // Extraire les résultats
+        const imageIsRelevant = data.isRelevant !== false;
+        const seoData = data.seo;
+        const keywordsData = data.keywords || {};
+        
+        // Traiter les mots-clés sélectionnés
+        const selectedKeywords = {};
+        const keywordsList = [];
+        
+        for (const cat of categories) {
+            const value = keywordsData[cat.name];
+            if (cat.multi && Array.isArray(value) && value.length > 0) {
+                // Valider que les mots sont dans la liste
+                const validKeywords = value.filter(v => 
+                    v && cat.keywords.some(k => k.toLowerCase() === v.toLowerCase())
+                );
+                if (validKeywords.length > 0) {
+                    selectedKeywords[cat.name] = validKeywords;
+                    keywordsList.push(...validKeywords);
+                }
+            } else if (!cat.multi && value && value !== 'null') {
+                // Valider que le mot est dans la liste
+                const match = cat.keywords.find(k => k.toLowerCase() === value.toLowerCase());
+                if (match) {
+                    selectedKeywords[cat.name] = match;
+                    keywordsList.push(match);
+                }
+            }
+        }
+        
+        // Déterminer si la marque a été appliquée
+        const brandApplied = brandName && (imageIsRelevant || !brandConditional);
         
         // =================================================================
         // RÉSULTAT
         // =================================================================
-        console.log(`\n✅ SEO GÉNÉRÉ !`);
+        console.log(`✅ SEO GÉNÉRÉ !`);
         console.log(`   📌 Titre : ${seoData.title}`);
-        console.log(`   🖼️ Alt : ${seoData.alt?.substring(0, 60)}...`);
-        console.log(`   📝 Desc : ${seoData.description?.substring(0, 60)}...`);
-        console.log(`   🏢 Marque appliquée : ${applyBrand ? 'Oui' : 'Non'}`);
+        console.log(`   🖼️ Alt : ${seoData.alt?.substring(0, 50)}...`);
+        console.log(`   🏢 Marque : ${brandApplied ? 'Oui' : 'Non'}`);
         if (keywordsList.length > 0) {
             console.log(`   🏷️ Mots-clés : ${keywordsList.join(', ')}`);
         }
@@ -676,7 +595,7 @@ IMPORTANT : Réponds UNIQUEMENT avec le JSON, sans commentaire.`;
         
         res.json({ 
             seo: seoData,
-            brandApplied: applyBrand,
+            brandApplied: brandApplied,
             imageRelevant: imageIsRelevant,
             keywordsUsed: keywordsList,
             categoriesUsed: categoriesUsed
@@ -689,4 +608,4 @@ IMPORTANT : Réponds UNIQUEMENT avec le JSON, sans commentaire.`;
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🏭 Usine V15.1 démarrée sur le port ${PORT}`));
+app.listen(PORT, () => console.log(`🏭 Usine V15.3 (Standard 2 Go) démarrée sur le port ${PORT}`));
