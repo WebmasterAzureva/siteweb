@@ -154,14 +154,14 @@ function analyzeSourceQuality(fileSize, width, height) {
 
 app.get('/', (req, res) => {
     const mem = process.memoryUsage();
-    res.send(`🏭 Usine V15.7 - RAM: ${Math.round(mem.heapUsed / 1024 / 1024)} Mo | Requêtes: ${requestCount}`);
+    res.send(`🏭 Usine V15.8 - RAM: ${Math.round(mem.heapUsed / 1024 / 1024)} Mo | Requêtes: ${requestCount}`);
 });
 
 // Route de monitoring détaillé
 app.get('/health', (req, res) => {
     const mem = process.memoryUsage();
     res.json({
-        version: '15.7',
+        version: '15.8',
         plan: 'Standard 2GB',
         status: 'ok',
         requests: requestCount,
@@ -244,10 +244,6 @@ app.post('/process', (req, res, next) => {
         console.log(`   Ratio : ${analysis.bytesPerPixel} octets/pixel`);
         console.log(`   Qualité source : ${analysis.qualityLevel}`);
         
-        if (analysis.qualityBonus > 0) {
-            console.log(`   🧠 Compensation : +${analysis.qualityBonus} qualité AVIF`);
-        }
-        
         // 4. RÉCUPÉRER LES QUALITÉS DE BASE (depuis WordPress ou défaut)
         let baseQualities = { ...DEFAULT_QUALITIES };
         
@@ -258,26 +254,23 @@ app.post('/process', (req, res, next) => {
                     mobile: parseInt(customQualities.mobile) || DEFAULT_QUALITIES.mobile,
                     tablet: parseInt(customQualities.tablet) || DEFAULT_QUALITIES.tablet,
                     desktop: parseInt(customQualities.desktop) || DEFAULT_QUALITIES.desktop,
-                    large: parseInt(customQualities.large) || DEFAULT_QUALITIES.large
+                    hd: parseInt(customQualities.hd) || DEFAULT_QUALITIES.hd,
+                    fullhd: parseInt(customQualities.fullhd) || DEFAULT_QUALITIES.fullhd
                 };
             } catch (e) {
                 console.log(`   ⚠️ Qualités invalides, utilisation des défauts`);
             }
         }
         
-        // 5. APPLIQUER LE BONUS DE QUALITÉ
-        const finalQualities = {
-            mobile: applyQualityBonus(baseQualities.mobile, analysis.qualityBonus),
-            tablet: applyQualityBonus(baseQualities.tablet, analysis.qualityBonus),
-            desktop: applyQualityBonus(baseQualities.desktop, analysis.qualityBonus),
-            large: applyQualityBonus(baseQualities.large, analysis.qualityBonus)
-        };
+        // 5. QUALITÉS FINALES (mode AUTO ajuste automatiquement, sinon on prend les valeurs définies)
+        const finalQualities = { ...baseQualities };
         
-        console.log(`\n🎚️ Qualités AVIF :`);
-        console.log(`   mobile:  ${finalQualities.mobile} (480px)`);
-        console.log(`   tablet:  ${finalQualities.tablet} (768px)`);
-        console.log(`   desktop: ${finalQualities.desktop} (1280px)`);
-        console.log(`   large:   ${finalQualities.large} (1920px)`);
+        console.log(`\n🎚️ Qualités AVIF (départ) :`);
+        console.log(`   mobile:  ${finalQualities.mobile} (${DEFAULT_SIZES.mobile}px)`);
+        console.log(`   tablet:  ${finalQualities.tablet} (${DEFAULT_SIZES.tablet}px)`);
+        console.log(`   desktop: ${finalQualities.desktop} (${DEFAULT_SIZES.desktop}px)`);
+        console.log(`   hd:      ${finalQualities.hd} (${DEFAULT_SIZES.hd}px)`);
+        console.log(`   fullhd:  ${finalQualities.fullhd} (${DEFAULT_SIZES.fullhd}px)`);
 
         // --- TÂCHE A : CONVERSION AVIF ---
         // 🆕 V14.1 : Traitement séquentiel pour économiser la RAM
@@ -709,4 +702,4 @@ LANGUE : Français uniquement.`;
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🏭 Usine V15.7 démarrée sur le port ${PORT}`));
+app.listen(PORT, () => console.log(`🏭 Usine V15.8 démarrée sur le port ${PORT}`));
