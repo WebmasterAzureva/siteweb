@@ -26,33 +26,31 @@ let requestCount = 0;
 // 🆕 V15.3 : Taille max avant pré-compression (plus souple avec 2 Go)
 const MAX_INPUT_SIZE = 5000;  // 5000px au lieu de 3000px
 
-// 🆕 V15.6 : Tailles optimisées pour Retina (base × 2)
-// 480 (mobile 1x) → 960 (mobile 2x / tablet 1x)
-// 960 → 1536 (tablet 2x) → 2048 (desktop ~1.5x) → 2560 (desktop 2x)
+// 🆕 V15.7 : Tailles par usage (optimisées pour écrans haute densité)
 const DEFAULT_SIZES = {
-    small: 480,     // Mobile 1x
-    medium: 960,    // Mobile 2x, Tablet 1x
-    large: 1536,    // Tablet 2x, Desktop 1x
-    xlarge: 2048,   // Desktop 1.5x
-    retina: 2560    // Desktop 2x, 4K
+    mobile: 480,      // Mobile 1x
+    tablet: 960,      // Mobile 2x / Tablet 1x
+    desktop: 1536,    // Tablet 2x / Desktop 1x
+    hd: 2048,         // Desktop 1.5x
+    fullhd: 2560      // Desktop 2x / 4K
 };
 
-// 🆕 V15.6 : Cibles de poids ajustées aux nouvelles tailles
+// 🆕 V15.7 : Cibles de poids progressives
 const TARGET_WEIGHTS = {
-    small:  { min: 20,  max: 50,  target: 35 },    // 480px
-    medium: { min: 40,  max: 100, target: 70 },    // 960px
-    large:  { min: 80,  max: 180, target: 130 },   // 1536px
-    xlarge: { min: 120, max: 280, target: 200 },   // 2048px
-    retina: { min: 180, max: 400, target: 300 }    // 2560px
+    mobile:  { min: 20,  max: 70,  target: 45 },    // 480px
+    tablet:  { min: 70,  max: 150, target: 110 },   // 960px
+    desktop: { min: 150, max: 250, target: 200 },   // 1536px
+    hd:      { min: 200, max: 350, target: 275 },   // 2048px
+    fullhd:  { min: 300, max: 500, target: 400 }    // 2560px
 };
 
 // Qualités de départ (point de départ pour l'optimisation auto)
 const DEFAULT_QUALITIES = {
-    small: 60,
-    medium: 55,
-    large: 50,
-    xlarge: 45,
-    retina: 42
+    mobile: 60,
+    tablet: 55,
+    desktop: 50,
+    hd: 45,
+    fullhd: 42
 };
 
 // ==============================================================================
@@ -156,14 +154,14 @@ function analyzeSourceQuality(fileSize, width, height) {
 
 app.get('/', (req, res) => {
     const mem = process.memoryUsage();
-    res.send(`🏭 Usine V15.6 (Retina-ready) - RAM: ${Math.round(mem.heapUsed / 1024 / 1024)} Mo | Requêtes: ${requestCount}`);
+    res.send(`🏭 Usine V15.7 - RAM: ${Math.round(mem.heapUsed / 1024 / 1024)} Mo | Requêtes: ${requestCount}`);
 });
 
 // Route de monitoring détaillé
 app.get('/health', (req, res) => {
     const mem = process.memoryUsage();
     res.json({
-        version: '15.6',
+        version: '15.7',
         plan: 'Standard 2GB',
         status: 'ok',
         requests: requestCount,
@@ -711,4 +709,4 @@ LANGUE : Français uniquement.`;
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🏭 Usine V15.6 (Retina-ready) démarrée sur le port ${PORT}`));
+app.listen(PORT, () => console.log(`🏭 Usine V15.7 démarrée sur le port ${PORT}`));
