@@ -35,13 +35,13 @@ const DEFAULT_SIZES = {
     fullhd: 2560      // Desktop Retina full
 };
 
-// 🆕 V15.10 : Cibles de poids ajustées aux nouvelles tailles
+// 🆕 V15.11 : Nouvelles cibles de poids (plus strictes)
 const TARGET_WEIGHTS = {
-    mobile:  { min: 15,  max: 50,  target: 30 },    // 350px
-    tablet:  { min: 50,  max: 120, target: 85 },    // 700px
-    desktop: { min: 120, max: 220, target: 170 },   // 1400px
-    hd:      { min: 180, max: 300, target: 240 },   // 1920px
-    fullhd:  { min: 250, max: 450, target: 350 }    // 2560px
+    mobile:  { min: 15,  max: 40,  target: 30 },    // 350px < 40 Ko
+    tablet:  { min: 40,  max: 80,  target: 60 },    // 700px < 80 Ko
+    desktop: { min: 80,  max: 160, target: 120 },   // 1400px < 160 Ko
+    hd:      { min: 120, max: 250, target: 180 },   // 1920px < 250 Ko
+    fullhd:  { min: 180, max: 350, target: 280 }    // 2560px < 350 Ko
 };
 
 // Qualités de départ (point de départ pour l'optimisation auto)
