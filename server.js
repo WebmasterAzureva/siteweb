@@ -26,31 +26,25 @@ let requestCount = 0;
 // 🆕 V15.3 : Taille max avant pré-compression (plus souple avec 2 Go)
 const MAX_INPUT_SIZE = 5000;  // 5000px au lieu de 3000px
 
-// 🆕 V15.10 : Nouvelles tailles optimisées (350/700/1400/1920/2560)
+// 🆕 V15.12 : 3 tailles optimisées (420/860/1920)
 const DEFAULT_SIZES = {
-    mobile: 350,      // Vignettes, cartes
-    tablet: 700,      // Mobile Retina, Desktop 50%
-    desktop: 1400,    // Tablet Retina, Desktop large
-    hd: 1920,         // Banner full width
-    fullhd: 2560      // Desktop Retina full
+    mobile: 420,      // Petites images, vignettes
+    tablet: 860,      // Images moyennes, mobile Retina
+    desktop: 1920     // Full width, tablet Retina
 };
 
-// 🆕 V15.11 : Nouvelles cibles de poids (plus strictes)
+// 🆕 V15.12 : Cibles de poids
 const TARGET_WEIGHTS = {
-    mobile:  { min: 15,  max: 40,  target: 30 },    // 350px < 40 Ko
-    tablet:  { min: 40,  max: 80,  target: 60 },    // 700px < 80 Ko
-    desktop: { min: 80,  max: 160, target: 120 },   // 1400px < 160 Ko
-    hd:      { min: 120, max: 250, target: 180 },   // 1920px < 250 Ko
-    fullhd:  { min: 180, max: 350, target: 280 }    // 2560px < 350 Ko
+    mobile:  { min: 20,  max: 50,  target: 40 },    // 420px < 50 Ko
+    tablet:  { min: 50,  max: 100, target: 80 },    // 860px < 100 Ko
+    desktop: { min: 100, max: 250, target: 180 }    // 1920px < 250 Ko
 };
 
-// Qualités de départ (point de départ pour l'optimisation auto)
+// Qualités de départ
 const DEFAULT_QUALITIES = {
     mobile: 60,
     tablet: 55,
-    desktop: 50,
-    hd: 45,
-    fullhd: 42
+    desktop: 50
 };
 
 // ==============================================================================
@@ -277,8 +271,6 @@ app.post('/process', (req, res, next) => {
         console.log(`   mobile:  ${finalQualities.mobile} (${DEFAULT_SIZES.mobile}px)`);
         console.log(`   tablet:  ${finalQualities.tablet} (${DEFAULT_SIZES.tablet}px)`);
         console.log(`   desktop: ${finalQualities.desktop} (${DEFAULT_SIZES.desktop}px)`);
-        console.log(`   hd:      ${finalQualities.hd} (${DEFAULT_SIZES.hd}px)`);
-        console.log(`   fullhd:  ${finalQualities.fullhd} (${DEFAULT_SIZES.fullhd}px)`);
 
         // --- TÂCHE A : CONVERSION AVIF ---
         // 🆕 V14.1 : Traitement séquentiel pour économiser la RAM
