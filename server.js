@@ -26,22 +26,22 @@ let requestCount = 0;
 // 🆕 V15.3 : Taille max avant pré-compression (plus souple avec 2 Go)
 const MAX_INPUT_SIZE = 5000;  // 5000px au lieu de 3000px
 
-// 🆕 V15.7 : Tailles par usage (optimisées pour écrans haute densité)
+// 🆕 V15.10 : Nouvelles tailles optimisées (350/700/1400/1920/2560)
 const DEFAULT_SIZES = {
-    mobile: 480,      // Mobile 1x
-    tablet: 960,      // Mobile 2x / Tablet 1x
-    desktop: 1536,    // Tablet 2x / Desktop 1x
-    hd: 2048,         // Desktop 1.5x
-    fullhd: 2560      // Desktop 2x / 4K
+    mobile: 350,      // Vignettes, cartes
+    tablet: 700,      // Mobile Retina, Desktop 50%
+    desktop: 1400,    // Tablet Retina, Desktop large
+    hd: 1920,         // Banner full width
+    fullhd: 2560      // Desktop Retina full
 };
 
-// 🆕 V15.7 : Cibles de poids progressives
+// 🆕 V15.10 : Cibles de poids ajustées aux nouvelles tailles
 const TARGET_WEIGHTS = {
-    mobile:  { min: 20,  max: 70,  target: 45 },    // 480px
-    tablet:  { min: 70,  max: 150, target: 110 },   // 960px
-    desktop: { min: 150, max: 250, target: 200 },   // 1536px
-    hd:      { min: 200, max: 350, target: 275 },   // 2048px
-    fullhd:  { min: 300, max: 500, target: 400 }    // 2560px
+    mobile:  { min: 15,  max: 50,  target: 30 },    // 350px
+    tablet:  { min: 50,  max: 120, target: 85 },    // 700px
+    desktop: { min: 120, max: 220, target: 170 },   // 1400px
+    hd:      { min: 180, max: 300, target: 240 },   // 1920px
+    fullhd:  { min: 250, max: 450, target: 350 }    // 2560px
 };
 
 // Qualités de départ (point de départ pour l'optimisation auto)
