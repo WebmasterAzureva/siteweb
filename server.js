@@ -337,12 +337,8 @@ app.post('/process', (req, res, next) => {
                 sizes.push({ name: smallest.name, width: maxDimension, quality: smallest.quality });
             }
             
-            // Ajouter une taille "originale" si l'image ne correspond à aucun breakpoint exact
-            const maxFilteredSize = sizes.length > 0 ? Math.max(...sizes.map(s => s.width)) : 0;
-            const maxConfiguredSize = Object.values(configuredSizes).length > 0 ? Math.max(...Object.values(configuredSizes)) : 2560;
-            if (maxDimension > maxFilteredSize && maxDimension < maxConfiguredSize) {
-                sizes.push({ name: 'original', width: maxDimension, quality: finalQualities.fullhd || 50 });
-            }
+            // 🆕 V15.10 : Supprimé la taille "original" qui polluait le srcset
+            // Les 5 tailles standard (350/700/1400/1920/2560) suffisent pour couvrir tous les cas
         }
 
         console.log(`\n📦 Génération AVIF (${sizes.length} taille${sizes.length > 1 ? 's' : ''}) :`);
